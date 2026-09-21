@@ -22,7 +22,7 @@ upstream tag on the pin date (never copied blindly from an older workflow).
 
 | Binary | Version | sha256 | Used in | Verified |
 |---|---|---|---|---|
-| [rhysd/actionlint](https://github.com/rhysd/actionlint) (linux_amd64 tarball) | 1.7.12 | `0e07927e22d11c2a824349b68d806dc306e4bbcc25ccc5796a944d5e0ba0b556` | actionlint-selfcheck.yml | official `checksums.txt` + independent re-download 2026-09-21 |
+| [rhysd/actionlint](https://github.com/rhysd/actionlint) (linux_amd64 tarball) | 1.7.12 | `8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8` | actionlint-selfcheck.yml | official `checksums.txt` + release-API `digest` + independent re-download 2026-09-21 (first selfcheck run FAILED the gate on a transcription error — mechanism proven) |
 
 ## Toolchain & base-image pins
 
