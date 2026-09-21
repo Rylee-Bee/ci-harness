@@ -11,10 +11,12 @@ name: reusable-node
 # uv-served Python app); it bootstraps Python + uv and syncs the root
 # lockfile before npm work starts.
 #
-# Permissions: this workflow declares `actions: write` for upload-artifact
-# only. Callers that set upload-dist: true must allow actions: write at the
-# calling (or workflow) level; callers with upload-dist: false need nothing
-# beyond contents: read.
+# Permissions: intentionally NOT declared at this workflow's top level.
+# A called reusable workflow may only keep or downgrade the caller's
+# GITHUB_TOKEN permissions (elevating fails the run at validation), so the
+# caller decides what this job may do: grant `actions: write` at the calling
+# job (or workflow) level when upload-dist: true; plain `contents: read` is
+# enough when upload-dist: false. See README "Permissions".
 #
 # Every action SHA below comes from pins/ACTIONS.md.
 
@@ -91,10 +93,8 @@ on:
         required: false
         default: "dist"
 
-permissions:
-  contents: read
-  # Consumed only by actions/upload-artifact below.
-  actions: write
+# No top-level `permissions:` key on purpose — see header; the caller's
+# grants flow down and may only be kept or downgraded by this workflow.
 
 jobs:
   build:

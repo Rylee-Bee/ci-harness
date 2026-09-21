@@ -46,5 +46,24 @@ Callers reference templates by `@main` for adoption simplicity; repos that
 want stronger immutability may pin a ci-harness commit SHA in the `uses:`
 line instead — the templates are byte-identical at a SHA.
 
+## Permissions
+
+Caller token permissions flow down and can only be **kept or downgraded**
+by a called workflow, never elevated (GitHub validates this before the run
+starts). So the templates take their grants from the caller: `reusable-node`
+declares no top-level `permissions:` at all — jobs that enable `upload-dist`
+must grant `actions: write` at the calling job (or workflow) level; with
+`upload-dist: false`, plain `contents: read` is enough. The python and
+container templates declare only `contents: read`.
+
+## Visibility requirement
+
+GitHub's access matrix for reusable workflows: **a workflow in a public
+repository can only call reusable workflows hosted in public repositories**
+([official rule](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#access-to-reusable-workflows)).
+An inaccessible private host surfaces as `workflow was not found` at parse
+time, with zero jobs scheduled. So adoption from a **public** repo requires
+ci-harness to be public; private repos can call it either way.
+
 > **Name disambiguation:** Play-Nice `harness/` is a behavioral-research
 > ledger; unrelated name collision. This repo is *CI* machinery only.
