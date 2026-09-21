@@ -1,0 +1,15 @@
+# Self-smoke fixture: exercises reusable-python.yml. Dependency-free apart
+# from the test extras; the lockfile is committed so `uv sync --frozen` has
+# something real to sync.
+[project]
+name = "ci-harness-py-fixture"
+version = "0.0.0"
+description = "Fixture exercising the ci-harness reusable Python pipeline; not a package."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<10",
+  "pytest-timeout>=2,<3",
+]

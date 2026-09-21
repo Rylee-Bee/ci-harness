@@ -1,0 +1,140 @@
+name: reusable-node
+
+# ci-harness — reusable Node pipeline (workflow_call).
+#
+# Harness-owned mechanics: checkout (pinned), setup-node, `npm ci` from the
+# committed lockfile, build/lint/test execution, upload of the dist bundle.
+# Repo-owned semantics: the actual commands. An empty command input skips its
+# step, so a repo with no lint step declares no lint — no fake green.
+#
+# setup-python exists for the common polyglot e2e shape (Playwright driving a
+# uv-served Python app); it bootstraps Python + uv and syncs the root
+# lockfile before npm work starts.
+#
+# Permissions: this workflow declares `actions: write` for upload-artifact
+# only. Callers that set upload-dist: true must allow actions: write at the
+# calling (or workflow) level; callers with upload-dist: false need nothing
+# beyond contents: read.
+#
+# Every action SHA below comes from pins/ACTIONS.md.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version for setup-node.
+        type: string
+        required: false
+        default: "22"
+      working-directory:
+        description: Directory holding package.json and the lockfile.
+        type: string
+        required: false
+        default: "."
+      npm-ci-args:
+        description: Extra arguments for `npm ci`.
+        type: string
+        required: false
+        default: "--no-audit --no-fund"
+      build-command:
+        description: Build command, e.g. "npm run build". Skipped when empty.
+        type: string
+        required: false
+        default: ""
+      lint-command:
+        description: Lint command, e.g. "npm run lint". Skipped when empty.
+        type: string
+        required: false
+        default: ""
+      test-command:
+        description: >-
+          Test command, e.g. "npx playwright install --with-deps chromium
+          && npx playwright test". Skipped when empty.
+        type: string
+        required: false
+        default: ""
+      setup-python:
+        description: >-
+          Also install Python + uv and run `uv sync --frozen` at the repo
+          root before npm steps (polyglot e2e support).
+        type: boolean
+        required: false
+        default: false
+      python-version:
+        description: CPython version used when setup-python is true.
+        type: string
+        required: false
+        default: "3.12"
+      uv-version:
+        description: Exact uv version bootstrapped when setup-python is true.
+        type: string
+        required: false
+        default: "0.11.28"
+      sync-args:
+        description: Extra arguments for `uv sync --frozen` (root project).
+        type: string
+        required: false
+        default: ""
+      upload-dist:
+        description: Upload the build output as a workflow artifact.
+        type: boolean
+        required: false
+        default: true
+      artifact-name:
+        description: Artifact name for the uploaded build output.
+        type: string
+        required: false
+        default: "dist"
+      dist-path:
+        description: Build output directory, relative to working-directory.
+        type: string
+        required: false
+        default: "dist"
+
+permissions:
+  contents: read
+  # Consumed only by actions/upload-artifact below.
+  actions: write
+
+jobs:
+  build:
+    name: node build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python (polyglot e2e)
+        if: ${{ inputs.setup-python }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Bootstrap uv and sync root Python dependencies
+        if: ${{ inputs.setup-python }}
+        working-directory: "."
+        run: |
+          pip install uv==${{ inputs.uv-version }}
+          uv sync --frozen ${{ inputs.sync-args }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Install dependencies from lockfile
+        run: npm ci ${{ inputs.npm-ci-args }}
+      - name: Build
+        if: ${{ inputs.build-command != '' }}
+        run: ${{ inputs.build-command }}
+      - name: Lint
+        if: ${{ inputs.lint-command != '' }}
+        run: ${{ inputs.lint-command }}
+      - name: Test
+        if: ${{ inputs.test-command != '' }}
+        run: ${{ inputs.test-command }}
+      - name: Upload build output
+        if: ${{ inputs.upload-dist }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.dist-path }}

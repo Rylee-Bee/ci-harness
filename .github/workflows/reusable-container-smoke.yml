@@ -1,0 +1,131 @@
+name: reusable-container-smoke
+
+# ci-harness — reusable container build + health smoke (workflow_call).
+#
+# Harness-owned mechanics: docker build from the repo's Dockerfile, an
+# optional detached `docker run`, a configurable healthz curl retry loop,
+# and container-log capture when the smoke fails.
+# Repo-owned semantics: build context and flags, run flags (port mapping,
+# env), the endpoint, and the retry budget.
+#
+# healthz-url empty → build-only mode (the image is built but not started).
+# No registry login or push happens here; publishing is a different,
+# more privileged concern and stays in the owning repo's pipeline.
+#
+# Optional flag inputs (build-args, run-args) are whitespace-split into
+# argument arrays — pass tokens without embedded quotes (e.g. -p 8080:80),
+# not quoted phrases.
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: Local tag for the built image.
+        type: string
+        required: false
+        default: "ci-harness-smoke:local"
+      build-context:
+        description: Docker build context directory.
+        type: string
+        required: false
+        default: "."
+      dockerfile:
+        description: Dockerfile path; empty uses <build-context>/Dockerfile.
+        type: string
+        required: false
+        default: ""
+      build-args:
+        description: Extra `docker build` flags (whitespace-separated tokens).
+        type: string
+        required: false
+        default: ""
+      run-args:
+        description: >-
+          Extra `docker run` flags placed before -d, e.g.
+          "-p 8080:8080 -e APP_TOKEN=ci-placeholder".
+        type: string
+        required: false
+        default: ""
+      healthz-url:
+        description: >-
+          URL polled with curl until green; empty means build-only
+          (container is not started).
+        type: string
+        required: false
+        default: ""
+      healthz-attempts:
+        description: Maximum health polling attempts before failing.
+        type: number
+        required: false
+        default: 30
+      healthz-delay-seconds:
+        description: Sleep between health polling attempts.
+        type: number
+        required: false
+        default: 2
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: container smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: docker build
+        env:
+          IMAGE: ${{ inputs.image-name }}
+          CONTEXT: ${{ inputs.build-context }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          BUILD_ARGS: ${{ inputs.build-args }}
+        run: |
+          set -euo pipefail
+          dockerfile_args=()
+          if [ -n "$DOCKERFILE" ]; then
+            dockerfile_args+=(-f "$DOCKERFILE")
+          fi
+          read -r -a extra_build_args <<< "$BUILD_ARGS"
+          docker build -t "$IMAGE" \
+            "${dockerfile_args[@]}" \
+            "${extra_build_args[@]}" \
+            "$CONTEXT"
+
+      - name: docker run (detached)
+        if: ${{ inputs.healthz-url != '' }}
+        env:
+          IMAGE: ${{ inputs.image-name }}
+          RUN_ARGS: ${{ inputs.run-args }}
+        run: |
+          set -euo pipefail
+          read -r -a extra_run_args <<< "$RUN_ARGS"
+          docker run --rm --name ci-harness-smoke "${extra_run_args[@]}" -d "$IMAGE"
+
+      - name: Wait for healthz
+        if: ${{ inputs.healthz-url != '' }}
+        env:
+          URL: ${{ inputs.healthz-url }}
+          ATTEMPTS: ${{ inputs.healthz-attempts }}
+          DELAY: ${{ inputs.healthz-delay-seconds }}
+        run: |
+          set -eu
+          ready=false
+          for ((i = 1; i <= ATTEMPTS; i++)); do
+            if curl -fsS --max-time 5 "$URL" > /dev/null; then
+              echo "healthz green on attempt ${i}/${ATTEMPTS}"
+              ready=true
+              break
+            fi
+            sleep "$DELAY"
+          done
+          if [ "$ready" != true ]; then
+            echo "::error::healthz ${URL} never became green in ${ATTEMPTS} attempts"
+            exit 1
+          fi
+
+      - name: Dump container logs on failure
+        if: ${{ failure() && inputs.healthz-url != '' }}
+        run: docker logs ci-harness-smoke || true

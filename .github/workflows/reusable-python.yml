@@ -1,0 +1,149 @@
+name: reusable-python
+
+# ci-harness — reusable Python pipeline (workflow_call).
+#
+# Harness-owned mechanics: checkout (pinned), setup-python, uv bootstrap,
+# `uv sync --frozen`, and invocation of the repo-given pytest command.
+# Repo-owned semantics: which extras to sync, which pytest arguments gate
+# the build, and which extra repo gates run after the tests.
+#
+# Every action SHA below comes from pins/ACTIONS.md — the single pinning
+# source. Consumers declare ~5 lines per job; see README.md.
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: CPython version for the test interpreter.
+        type: string
+        required: false
+        default: "3.12"
+      uv-version:
+        description: Exact uv version bootstrapped via pip.
+        type: string
+        required: false
+        default: "0.11.28"
+      project-directory:
+        description: Directory holding pyproject.toml and uv.lock.
+        type: string
+        required: false
+        default: "."
+      sync-args:
+        description: >-
+          Extra arguments for `uv sync --frozen`, e.g.
+          "--extra test --extra crypto".
+        type: string
+        required: false
+        default: ""
+      pytest-args:
+        description: >-
+          Arguments for `uv run pytest` — the repo's real test invocation.
+          Quote-bearing arguments (e.g. -k "A or B") keep their shell
+          meaning: this text is expanded into the run command, exactly as
+          if the repo had written the step itself.
+        type: string
+        required: false
+        default: ""
+      post-test-commands:
+        description: >-
+          Shell lines to run in the synced environment after pytest passes,
+          for repo-owned gates that are not pytest (validators, censuses).
+          Executed under `set -euo pipefail`; first non-zero exit fails the job.
+        type: string
+        required: false
+        default: ""
+      enable-ruff:
+        description: >-
+          Add a separate ruff lint job. ruff must come from the repo's own
+          uv.lock (the job runs `uv run ruff`).
+        type: boolean
+        required: false
+        default: false
+      ruff-args:
+        description: Arguments for `uv run ruff`.
+        type: string
+        required: false
+        default: "check ."
+      enable-bandit:
+        description: >-
+          Add a separate bandit scan job. bandit must come from the repo's
+          own uv.lock (the job runs `uv run bandit`).
+        type: boolean
+        required: false
+        default: false
+      bandit-args:
+        description: Arguments for `uv run bandit`.
+        type: string
+        required: false
+        default: "-q -r ."
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: python tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.project-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Bootstrap uv
+        run: pip install uv==${{ inputs.uv-version }}
+      - name: Sync locked dependencies
+        run: uv sync --frozen ${{ inputs.sync-args }}
+      - name: Run pytest
+        run: uv run pytest ${{ inputs.pytest-args }}
+      - name: Repo-owned post-test gates
+        if: ${{ inputs.post-test-commands != '' }}
+        run: |
+          set -euo pipefail
+          ${{ inputs.post-test-commands }}
+
+  ruff:
+    name: ruff
+    if: ${{ inputs.enable-ruff }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.project-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Bootstrap uv
+        run: pip install uv==${{ inputs.uv-version }}
+      - name: Sync locked dependencies
+        run: uv sync --frozen ${{ inputs.sync-args }}
+      - name: Run ruff
+        run: uv run ruff ${{ inputs.ruff-args }}
+
+  bandit:
+    name: bandit
+    if: ${{ inputs.enable-bandit }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.project-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Bootstrap uv
+        run: pip install uv==${{ inputs.uv-version }}
+      - name: Sync locked dependencies
+        run: uv sync --frozen ${{ inputs.sync-args }}
+      - name: Run bandit
+        run: uv run bandit ${{ inputs.bandit-args }}

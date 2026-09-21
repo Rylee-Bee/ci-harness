@@ -1,0 +1,46 @@
+name: actionlint-selfcheck
+
+# The harness validates itself on every push and PR: every workflow file in
+# this repository — including the three workflow_call templates — is parsed
+# statically with actionlint (shellcheck on all `run:` bodies), at the exact
+# pinned version and sha256 recorded in pins/ACTIONS.md.
+#
+# Static-clean is necessary but NOT sufficient for reusable workflows; the
+# real-execution proof lives in self-smoke.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: actionlint-selfcheck-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: actionlint .
+    runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA256: "0e07927e22d11c2a824349b68d806dc306e4bbcc25ccc5796a944d5e0ba0b556"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned actionlint (checksum-verified)
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" actionlint
+          ./actionlint --version | head -n 2
+      - name: Lint every workflow in this repository
+        # Bare invocation = actionlint's own default glob over
+        # .github/workflows/*.yml; passing "." is a directory, not a pattern.
+        run: ./actionlint -color

@@ -1,0 +1,53 @@
+name: self-smoke
+
+# Real-execution proof for the three workflow_call templates: each job below
+# calls one of this repo's own reusable workflows against a small fixture
+# under fixtures/. actionlint-selfcheck.yml proves static parsing; this
+# proves the call contract, the pinned actions resolve, `uv sync --frozen`
+# works from a committed lockfile, `npm ci` + build + artifact upload work,
+# and docker build + run + healthz retry loop works end to end.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  # The node template's upload-dist step needs actions: write; granted here
+  # at the calling level so the reusable workflow stays inside caller caps.
+  actions: write
+
+concurrency:
+  group: self-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: python template
+    uses: ./.github/workflows/reusable-python.yml
+    with:
+      project-directory: "fixtures/py-demo"
+      sync-args: "--extra test"
+      pytest-args: "--timeout=30 -q"
+
+  node:
+    name: node template
+    uses: ./.github/workflows/reusable-node.yml
+    with:
+      working-directory: "fixtures/node-demo"
+      build-command: "npm run build"
+      lint-command: "npm run lint"
+      upload-dist: true
+      artifact-name: "fixture-dist"
+
+  container-smoke:
+    name: container smoke template
+    uses: ./.github/workflows/reusable-container-smoke.yml
+    with:
+      image-name: "ci-harness-self-smoke:local"
+      build-context: "fixtures/container-demo"
+      run-args: "-p 8080:80"
+      healthz-url: "http://127.0.0.1:8080/"
+      healthz-attempts: 30
+      healthz-delay-seconds: 2
