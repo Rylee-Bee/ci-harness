@@ -50,8 +50,9 @@ line instead — the templates are byte-identical at a SHA.
 ## Contract freshness
 
 Repos that pin a Play-Nice contracts revision (an adoption-v1 manifest with
-`source.revision`) call one ~5-line job to detect drift, typically weekly
-and whenever the manifest's PR touches it:
+`source.revision`) call one ~4-line job to detect drift — the one question
+it answers is *has the authoritative remote moved past our pin?* — typically
+on a weekly schedule and whenever the manifest itself changes:
 
 ```yaml
   contract-freshness:
@@ -64,18 +65,27 @@ Mechanics are fail-closed by construction: the job runs
 `contractctl freshness --json` from a fresh shallow clone of
 `Rylee-Bee/play-nice-contracts` and propagates its exit code — 0 **only**
 when the verdict is CURRENT; BEHIND/DIVERGED exit 1; UNREACHABLE/UNKNOWN
-(missing or malformed manifest included) exit 2. The template also exposes
-`exit-code` and `status` as job outputs so a caller can assert on the
-verdict without parsing logs.
+(missing or malformed manifest included) exit 2. The tool's JSON verdict is
+printed, and `exit-code` / `status` are exposed as job outputs so a caller
+can assert on the verdict without parsing logs. The default `expect: current`
+input means red on ANY drift; `expect: noncurrent` is the harness's own
+self-smoke inversion (see below) and is not a soft-fail knob.
 
 **Detection is automated; pin movement is manual.** A red freshness job
-means: read what changed upstream, then re-pin `source.revision` in the
-consumer repo as a human-reviewed commit — or accept the lag knowingly.
-There is deliberately no sync job here, and there never will be; the
-self-smoke proves both halves on every push (a current-pin fixture that
-must pass and a stale-pin fixture that must go red, with an assertion job
-proving the nonzero exit — including that fixture's own re-pin when
-upstream moves).
+means: read what changed upstream (verify commit + VERSION/CHANGELOG + lock
+diff, re-read, re-attest), then re-pin `source.revision` in the consumer
+repo as a human-reviewed commit — or accept the lag knowingly. There is
+deliberately no sync job here, and there never will be.
+
+self-smoke proves both verdicts as POSITIVE assertions on every run: the
+committed current-pin fixture must pass through the real `uses:` call; a
+permanently stale fixture must exit nonzero — proven by an inversion job
+(`expect: noncurrent`, green exactly when the gate correctly goes red,
+because GitHub forbids `continue-on-error` on `uses:` jobs) plus an
+assertion job on the probe's propagated outputs; and a manifest generated
+live from `git ls-remote` at run time must read CURRENT, so the green-path
+witness never rots when the library moves. When upstream does advance, the
+committed current-pin fixture goes red on purpose until a human re-pins it.
 
 ## Permissions
 
@@ -86,31 +96,6 @@ declares no top-level `permissions:` at all — jobs that enable `upload-dist`
 must grant `actions: write` at the calling job (or workflow) level; with
 `upload-dist: false`, plain `contents: read` is enough. The python and
 container templates declare only `contents: read`.
-
-## Contract currency (`reusable-contract-freshness`)
-
-For repos that pin a Play-Nice-style adoption manifest: one job, on a
-schedule, that answers exactly one question — *has the authoritative remote
-moved past our pin?* It runs `contractctl freshness` (stdlib, fail-closed:
-exit 0 only on `CURRENT`; BEHIND/DIVERGED/UNREACHABLE/UNKNOWN all red) and
-propagates the exit code. **Detection is automated; movement is never part
-of this job** — bumping a pin remains the consumer's manual, attested ritual
-(verify commit + VERSION/CHANGELOG + lock diff, re-read, re-attest). Consumer
-contract is 4 lines:
-
-```yaml
-  contract-freshness:
-    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-contract-freshness.yml@main
-    with:
-      manifest-path: ".project/contracts/adoption.yaml"
-```
-
-self-smoke proves both verdicts as POSITIVE assertions: a permanently
-stale fixture run through the real `uses:` call with `expect: behind`
-(green exactly when the probe correctly goes red — GitHub forbids
-continue-on-error on `uses:` jobs, so the inversion is explicit input,
-not a swallowed failure) and a live-remote-sha manifest that must read
-CURRENT (generated at run time, so the green path cannot rot).
 
 ## Visibility requirement
 

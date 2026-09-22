@@ -1,0 +1,19 @@
+# ci-harness self-smoke fixture — CURRENT adoption pin (must pass today).
+#
+# Pinned to the live default-branch head of Rylee-Bee/play-nice-contracts
+# at the time of writing. Unlike the stale probe, this fixture is a
+# DELIBERATE tripwire: when the library advances, `contract freshness —
+# current pin` goes red on purpose, reminding a human to re-pin this file
+# (one-line `source.revision` edit — a manual, reviewed act, exactly the
+# rule the gate enforces for consumers). The parallel
+# contract-freshness-live job generates its pin at run time and never
+# rots; together the two prove the green verdict tracks the remote rather
+# than a hardcoded constant.
+schema: play-nice/adoption-v1
+project: ci-harness-fixture-current
+source:
+  repository: Rylee-Bee/play-nice-contracts
+  # 44ec8f4 = v0.10.0 + citation sweep (2026-09-20)
+  revision: 44ec8f42e4e9f1c993ff29ec135d37c9dbd551d6
+always:
+  - assume-unknown
