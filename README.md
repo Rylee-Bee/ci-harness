@@ -36,6 +36,7 @@ Available templates:
 | `reusable-python.yml` | uv + `uv sync --frozen` + repo-given pytest args, optional repo gates after pytest, optional ruff/bandit jobs |
 | `reusable-node.yml` | setup-node + `npm ci` + optional build/lint/test + dist artifact upload; optional Python/uv bootstrap for polyglot e2e (Playwright on a uvicorn app) |
 | `reusable-container-smoke.yml` | docker build + detached run + configurable healthz curl retry loop, with container logs on failure |
+| `reusable-contract-freshness.yml` | shallow-clone the Play-Nice contract source over https, run `contractctl freshness --manifest <caller manifest> --json`; exit 0 only on CURRENT (fail closed) |
 
 How this repo proves itself (static checks alone prove nothing for
 `workflow_call`): `actionlint-selfcheck.yml` lints every workflow here with
@@ -45,6 +46,36 @@ template against the fixtures under `fixtures/` on every push/PR.
 Callers reference templates by `@main` for adoption simplicity; repos that
 want stronger immutability may pin a ci-harness commit SHA in the `uses:`
 line instead — the templates are byte-identical at a SHA.
+
+## Contract freshness
+
+Repos that pin a Play-Nice contracts revision (an adoption-v1 manifest with
+`source.revision`) call one ~5-line job to detect drift, typically weekly
+and whenever the manifest's PR touches it:
+
+```yaml
+  contract-freshness:
+    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-contract-freshness.yml@main
+    with:
+      manifest-path: .project/contracts/adoption.yaml
+```
+
+Mechanics are fail-closed by construction: the job runs
+`contractctl freshness --json` from a fresh shallow clone of
+`Rylee-Bee/play-nice-contracts` and propagates its exit code — 0 **only**
+when the verdict is CURRENT; BEHIND/DIVERGED exit 1; UNREACHABLE/UNKNOWN
+(missing or malformed manifest included) exit 2. The template also exposes
+`exit-code` and `status` as job outputs so a caller can assert on the
+verdict without parsing logs.
+
+**Detection is automated; pin movement is manual.** A red freshness job
+means: read what changed upstream, then re-pin `source.revision` in the
+consumer repo as a human-reviewed commit — or accept the lag knowingly.
+There is deliberately no sync job here, and there never will be; the
+self-smoke proves both halves on every push (a current-pin fixture that
+must pass and a stale-pin fixture that must go red, with an assertion job
+proving the nonzero exit — including that fixture's own re-pin when
+upstream moves).
 
 ## Permissions
 
@@ -74,9 +105,12 @@ contract is 4 lines:
       manifest-path: ".project/contracts/adoption.yaml"
 ```
 
-self-smoke proves both verdicts honestly: the stale fixture probe MUST be
-red (an assertion job fails the smoke if it ever goes soft) and a
-live-remote-sha manifest must be green.
+self-smoke proves both verdicts as POSITIVE assertions: a permanently
+stale fixture run through the real `uses:` call with `expect: behind`
+(green exactly when the probe correctly goes red — GitHub forbids
+continue-on-error on `uses:` jobs, so the inversion is explicit input,
+not a swallowed failure) and a live-remote-sha manifest that must read
+CURRENT (generated at run time, so the green path cannot rot).
 
 ## Visibility requirement
 
