@@ -1,0 +1,70 @@
+name: reusable-contract-freshness
+
+# ci-harness — Play-Nice contract-currency probe (workflow_call).
+#
+# ONE PURPOSE: detect drift, automatically; never move a pin. `contractctl
+# freshness` runs git ls-remote against the authoritative library and exits
+# 0 ONLY when status is CURRENT (BEHIND/DIVERGED/UNREACHABLE/UNKNOWN all
+# fail closed — the tool's own contract, not ours). Movement of a consumer's
+# adoption pin stays the repo's manual, attested ritual.
+#
+# Mechanics owned here: pinned checkout/setup, shallow clone of the library
+# to obtain the stdlib-only tool, invocation, exit-code propagation.
+# Semantics owned by the caller: WHICH manifest is checked, and the schedule.
+#
+# Every action SHA comes from pins/ACTIONS.md (same two pins as reusable-python).
+
+on:
+  workflow_call:
+    inputs:
+      manifest-path:
+        description: >-
+          Path to the consumer's adoption manifest (adoption-v1 schema),
+          relative to the caller's workspace root — e.g.
+          ".project/contracts/adoption.yaml".
+        type: string
+        required: true
+      library-url:
+        description: >-
+          Git URL of the authoritative contract library. Default matches the
+          freshness tool's own remote expectation (public GitHub); override
+          per-consumer if your library lives elsewhere.
+        type: string
+        required: false
+        default: "https://github.com/Rylee-Bee/play-nice-contracts"
+      python-version:
+        description: CPython for the stdlib-only tool.
+        type: string
+        required: false
+        default: "3.12"
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    name: contract freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Fetch the contractctl tool (library, shallow)
+        env:
+          LIBRARY_URL: ${{ inputs.library-url }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "$LIBRARY_URL" "$RUNNER_TEMP/library"
+      - name: Verify the remote revision (fail closed)
+        env:
+          MANIFEST: ${{ inputs.manifest-path }}
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/library/tools/contractctl/contractctl.py" \
+            freshness --manifest "$GITHUB_WORKSPACE/$MANIFEST" --json
+        # exit 0 <=> status CURRENT. Anything else (BEHIND/DIVERGED/
+        # UNREACHABLE/UNKNOWN/parse-fail) exits nonzero and fails this job.
+        # To read a red run honestly: the JSON above is the verdict.

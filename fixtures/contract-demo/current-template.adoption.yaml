@@ -1,0 +1,11 @@
+# fixtures/contract-demo/current-template.adoption.yaml — SELF-SMOKE FIXTURE.
+# @PIN@ is replaced at run time with the LIVE remote main SHA (git ls-remote),
+# so the green path can never rot into a permanent red when the library moves:
+# the assertion is "a manifest pinned to the current remote reports CURRENT".
+schema: play-nice/adoption-v1
+project: ci-harness-fixture-current
+source:
+  repository: Rylee-Bee/play-nice-contracts
+  revision: "@PIN@"
+always:
+  - assume-unknown

@@ -51,3 +51,47 @@ jobs:
       healthz-url: "http://127.0.0.1:8080/"
       healthz-attempts: 30
       healthz-delay-seconds: 2
+
+  # Heartbeat of the Play-Nice contract. The RED path runs the real `uses:`
+  # call against the permanently-stale fixture — continue-on-error because a
+  # CORRECT red is the expected outcome; the assertion job below fails the
+  # smoke if the probe ever goes soft (a silent-green currency check is
+  # exactly the failure mode that produced the 2026-09-20 attestation gap).
+  contract-freshness-stale:
+    name: contract freshness — stale pin (red path)
+    uses: ./.github/workflows/reusable-contract-freshness.yml
+    continue-on-error: true
+    with:
+      manifest-path: "fixtures/contract-demo/stale.adoption.yaml"
+
+  contract-freshness-verdicts:
+    name: contract freshness — verdict assertions
+    needs: contract-freshness-stale
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Stale probe must be RED (a soft green here is a broken harness)
+        env:
+          STALE_RESULT: ${{ needs.contract-freshness-stale.result }}
+        run: |
+          set -euo pipefail
+          if [ "$STALE_RESULT" != "failure" ]; then
+            echo "::error::stale-pin probe result=$STALE_RESULT, expected failure — red path went soft"
+            exit 1
+          fi
+          echo "stale-pin probe correctly RED"
+      - name: Live-sha manifest must be GREEN (green path, cannot rot)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/Rylee-Bee/play-nice-contracts "$RUNNER_TEMP/library"
+          sha=$(git ls-remote https://github.com/Rylee-Bee/play-nice-contracts refs/heads/main | awk '{print $1}')
+          test -n "$sha"
+          sed "s/@PIN@/$sha/" fixtures/contract-demo/current-template.adoption.yaml > "$RUNNER_TEMP/current.adoption.yaml"
+          python3 "$RUNNER_TEMP/library/tools/contractctl/contractctl.py" \
+            freshness --manifest "$RUNNER_TEMP/current.adoption.yaml" --json
+          echo "live-sha manifest correctly GREEN"

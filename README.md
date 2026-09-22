@@ -56,6 +56,28 @@ must grant `actions: write` at the calling job (or workflow) level; with
 `upload-dist: false`, plain `contents: read` is enough. The python and
 container templates declare only `contents: read`.
 
+## Contract currency (`reusable-contract-freshness`)
+
+For repos that pin a Play-Nice-style adoption manifest: one job, on a
+schedule, that answers exactly one question — *has the authoritative remote
+moved past our pin?* It runs `contractctl freshness` (stdlib, fail-closed:
+exit 0 only on `CURRENT`; BEHIND/DIVERGED/UNREACHABLE/UNKNOWN all red) and
+propagates the exit code. **Detection is automated; movement is never part
+of this job** — bumping a pin remains the consumer's manual, attested ritual
+(verify commit + VERSION/CHANGELOG + lock diff, re-read, re-attest). Consumer
+contract is 4 lines:
+
+```yaml
+  contract-freshness:
+    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-contract-freshness.yml@main
+    with:
+      manifest-path: ".project/contracts/adoption.yaml"
+```
+
+self-smoke proves both verdicts honestly: the stale fixture probe MUST be
+red (an assertion job fails the smoke if it ever goes soft) and a
+live-remote-sha manifest must be green.
+
 ## Visibility requirement
 
 GitHub's access matrix for reusable workflows: **a workflow in a public
