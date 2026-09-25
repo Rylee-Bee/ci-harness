@@ -1,3 +1,8 @@
 .venv/
 __pycache__/
 node_modules/
+
+# Generated content index (agent-config). Regenerable; binary; contains
+# absolute home paths, so it must never reach a public repo.
+data/content.db
+**/data/content.db
