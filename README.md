@@ -68,7 +68,10 @@ when the verdict is CURRENT; BEHIND/DIVERGED exit 1; UNREACHABLE/UNKNOWN
 (missing or malformed manifest included) exit 2. The tool's JSON verdict is
 printed, and `exit-code` / `status` are exposed as job outputs so a caller
 can assert on the verdict without parsing logs. The default `expect: current`
-input means red on ANY drift; `expect: noncurrent` is the harness's own
+input means red on ANY drift; `expect: warn` (for pull requests in a repo
+whose pin moves by robot, `tools/pin-sync` in play-nice-contracts) passes with
+a visible warning and keeps the real verdict in `status`;
+`expect: noncurrent` is the harness's own
 self-smoke inversion (see below) and is not a soft-fail knob.
 
 **Detection is automated; pin movement is manual.** A red freshness job
