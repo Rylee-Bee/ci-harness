@@ -22,10 +22,12 @@ name: reusable-contract-freshness
 # ancestry for old commits, so a stale pin reports DIVERGED rather than
 # BEHIND; both are nonzero, which is the guarantee consumers depend on.
 #
-# Honesty line: detection is automated; pin movement is manual. This
-# template never syncs a pin — when it goes red, a human reads what
-# changed upstream and re-pins in the consumer repo, or accepts the lag
-# knowingly.
+# Honesty line: this template never syncs a pin. Pin movement belongs to
+# the consumer: by hand, or by a pin robot that opens a reviewed pin PR
+# (play-nice-contracts tools/pin-sync). `expect: warn` is for pull
+# requests in a repo that has such a robot: drift is reported as a
+# warning so unrelated PRs aren't blocked, while pushes to the default
+# branch and the schedule keep `current` and stay honestly red.
 
 on:
   workflow_call:
@@ -45,7 +47,10 @@ on:
           refuses the drifted pin — GitHub forbids continue-on-error on
           uses: jobs, so this inversion is an explicit, readable input,
           never a swallowed failure. "noncurrent" accepts exactly
-          BEHIND/DIVERGED with nonzero exit; nothing else.
+          BEHIND/DIVERGED with nonzero exit; nothing else. "warn" (for
+          pull requests in repos with a pin robot) passes with a visible
+          warning on any non-CURRENT verdict; the `status` output still
+          carries the real verdict.
         type: string
         required: false
         default: "current"
@@ -112,8 +117,17 @@ jobs:
               fi
               echo "stale pin correctly refused (status=$status exit=$rc) — the red path is genuinely red"
               ;;
+            warn)
+              if [ "$rc" -ne 0 ]; then
+                echo "::warning::Play-Nice moved (status=$status): this PR is not blocked; the pin robot opens a separate pin PR. ${detail}"
+                echo "### Play-Nice moved ($status)" >> "$GITHUB_STEP_SUMMARY"
+                echo "Not blocking this PR. The pin robot opens a separate pin PR; the default branch and the weekly check stay strict." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "CURRENT — verdict green"
+              fi
+              ;;
             *)
-              echo "::error::unknown expect='$EXPECT' (valid: current | noncurrent)"
+              echo "::error::unknown expect='$EXPECT' (valid: current | noncurrent | warn)"
               exit 2
               ;;
           esac
