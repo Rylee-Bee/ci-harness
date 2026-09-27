@@ -14,6 +14,6 @@ project: ci-harness-fixture-current
 source:
   repository: Rylee-Bee/play-nice-contracts
   # 44ec8f4 = v0.10.0 + citation sweep (2026-09-20)
-  revision: 44ec8f42e4e9f1c993ff29ec135d37c9dbd551d6
+  revision: 7c6e56dd83e6e7e7bee5665a99bf421897b055a2   # pin robot 2026-09-26: follows play-nice-contracts main; changed since 44ec8f4: `agent-behavior` 1.1.0 -> 2.0.0 (major); `api` 1.0.0 -> 2.0.0 (major); `ask-for-help` 1.3.0 -> 2.0.0 (major); `bounded-work` 1.0.0 -> 2.0.0 (major); `cli` 1.0.0 -> 2.0.0 (major); `git-and-worktrees` 1.0.0 -> 2.0.0 (major); `human-reliability` 1.2.0 -> 2.0.0 (major); `observability` 1.0.0 -> 2.0.0 (m
 always:
   - assume-unknown
