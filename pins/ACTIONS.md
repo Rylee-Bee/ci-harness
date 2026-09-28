@@ -17,6 +17,7 @@ upstream tag on the pin date (never copied blindly from an older workflow).
 | [actions/setup-python](https://github.com/actions/setup-python) | v7.0.0 | `5fda3b95a4ea91299a34e894583c3862153e4b97` | reusable-python, reusable-node | `git ls-remote` 2026-09-21 |
 | [actions/setup-node](https://github.com/actions/setup-node) | v7.0.0 | `820762786026740c76f36085b0efc47a31fe5020` | reusable-node | `git ls-remote` 2026-09-21 |
 | [actions/upload-artifact](https://github.com/actions/upload-artifact) | v7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | reusable-node | `git ls-remote` 2026-09-21 |
+| [gitleaks/gitleaks-action](https://github.com/gitleaks/gitleaks-action) | v3.0.0 | `e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e` | reusable-secret-scan | `git ls-remote --tags` 2026-09-28 |
 
 ## Pinned binaries
 
