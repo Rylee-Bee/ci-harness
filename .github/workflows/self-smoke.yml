@@ -58,6 +58,30 @@ jobs:
       healthz-attempts: 30
       healthz-delay-seconds: 2
 
+  # reusable-uat's call contract, proven positively rather than assumed. The
+  # fixture exits nonzero if UAT_READONLY never reached the repo-owned command,
+  # or if it carried the wrong value for the `read-only` input — so a green run
+  # is a real assertion about the wiring, not a silent skip. No browser is
+  # needed to prove the contract; the real-browser harness has its own smoke.
+  # Both branches of the read-only input are exercised on purpose.
+  uat:
+    name: uat template (read-only posture arrives as 1)
+    uses: ./.github/workflows/reusable-uat.yml
+    with:
+      working-directory: "fixtures/uat-demo"
+      uat-command: "FIXTURE_EXPECT_READONLY=1 npm run uat"
+      read-only: true
+      artifact-name: "fixture-uat"
+
+  uat-writes-permitted:
+    name: uat template (read-only off arrives as 0, no artifact)
+    uses: ./.github/workflows/reusable-uat.yml
+    with:
+      working-directory: "fixtures/uat-demo"
+      uat-command: "FIXTURE_EXPECT_READONLY=0 npm run uat"
+      read-only: false
+      upload-artifacts: false
+
   contract-freshness-current:
     name: contract freshness — current pin (must pass)
     uses: ./.github/workflows/reusable-contract-freshness.yml

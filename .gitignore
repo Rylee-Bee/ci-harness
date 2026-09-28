@@ -2,6 +2,10 @@
 __pycache__/
 node_modules/
 
+# UAT run artifacts (reusable-uat fixture and any local run). Regenerable
+# evidence: findings, report, screenshots, traces, videos.
+uat-out/
+
 # Generated content index (agent-config). Regenerable; binary; contains
 # absolute home paths, so it must never reach a public repo.
 data/content.db

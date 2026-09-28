@@ -1,0 +1,9 @@
+{
+  "name": "ci-harness-uat-demo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Self-smoke fixture for reusable-uat.yml — proves the call contract, not the browser.",
+  "scripts": {
+    "uat": "node uat.mjs"
+  }
+}
