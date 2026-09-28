@@ -37,6 +37,7 @@ Available templates:
 | `reusable-node.yml` | setup-node + `npm ci` + optional build/lint/test + dist artifact upload; optional Python/uv bootstrap for polyglot e2e (Playwright on a uvicorn app) |
 | `reusable-container-smoke.yml` | docker build + detached run + configurable healthz curl retry loop, with container logs on failure |
 | `reusable-contract-freshness.yml` | shallow-clone the Play-Nice contract source over https, run `contractctl freshness --manifest <caller manifest> --json`; exit 0 only on CURRENT (fail closed) |
+| `reusable-uat.yml` | pinned checkout + setup-node (npm cache, conditional `npm ci`) + a caller-supplied real-browser UAT command under a `UAT_READONLY=1` read-only posture with optional `uat-token` passthrough; UAT output uploaded as an artifact (14-day retention) |
 
 How this repo proves itself (static checks alone prove nothing for
 `workflow_call`): `actionlint-selfcheck.yml` lints every workflow here with
@@ -92,10 +93,12 @@ committed current-pin fixture goes red on purpose until a human re-pins it.
 Caller token permissions flow down and can only be **kept or downgraded**
 by a called workflow, never elevated (GitHub validates this before the run
 starts). So the templates take their grants from the caller: `reusable-node`
-declares no top-level `permissions:` at all — jobs that enable `upload-dist`
-must grant `actions: write` at the calling job (or workflow) level; with
-`upload-dist: false`, plain `contents: read` is enough. The python and
-container templates declare only `contents: read`.
+and `reusable-uat` declare no top-level `permissions:` at all because they
+upload artifacts — jobs that enable `upload-dist` (node) or
+`upload-artifacts: true` (uat) must grant `actions: write` at the calling
+job (or workflow) level; with those upload inputs false, plain
+`contents: read` is enough. The python and container templates declare only
+`contents: read`.
 
 ## Visibility requirement
 

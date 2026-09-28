@@ -15,8 +15,8 @@ upstream tag on the pin date (never copied blindly from an older workflow).
 |---|---|---|---|---|
 | [actions/checkout](https://github.com/actions/checkout) | v7.0.1 | `3d3c42e5aac5ba805825da76410c181273ba90b1` | all workflows | `git ls-remote` 2026-09-21 |
 | [actions/setup-python](https://github.com/actions/setup-python) | v7.0.0 | `5fda3b95a4ea91299a34e894583c3862153e4b97` | reusable-python, reusable-node | `git ls-remote` 2026-09-21 |
-| [actions/setup-node](https://github.com/actions/setup-node) | v7.0.0 | `820762786026740c76f36085b0efc47a31fe5020` | reusable-node | `git ls-remote` 2026-09-21 |
-| [actions/upload-artifact](https://github.com/actions/upload-artifact) | v7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | reusable-node | `git ls-remote` 2026-09-21 |
+| [actions/setup-node](https://github.com/actions/setup-node) | v7.0.0 | `820762786026740c76f36085b0efc47a31fe5020` | reusable-node, reusable-uat | `git ls-remote` 2026-09-21 |
+| [actions/upload-artifact](https://github.com/actions/upload-artifact) | v7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | reusable-node, reusable-uat | `git ls-remote` 2026-09-21 |
 
 ## Pinned binaries
 

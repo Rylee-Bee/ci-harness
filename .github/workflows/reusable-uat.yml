@@ -1,0 +1,162 @@
+name: reusable-uat
+
+# ci-harness — reusable real-browser UAT pipeline (workflow_call).
+#
+# What this is: a caller-supplied user-acceptance test command run against a
+# real browser — real mouse, touch, and typing interaction plus axe-core
+# accessibility assertions. Deliberately NOT `locator.click()` DOM-unit
+# testing: the point is the interaction a user actually performs, so a
+# template that stubs the app would defeat the purpose. The harness owns
+# checkout (pinned), Node setup, lockfile-gated `npm ci`, and artifact
+# upload; the repo owns the UAT command itself.
+#
+# Read-only posture: `read-only` (default true) exports UAT_READONLY=1.
+# When read-only is true the harness aborts every non-GET request and
+# records `would have sent: METHOD path` instead of performing it — writes
+# fail closed. The `uat-token` secret is passed only via the step `env:`
+# block: it is never echoed to the log and never written to a file.
+#
+# Permissions: intentionally NOT declared at this workflow's top level.
+# It uploads artifacts, so the caller must grant `actions: write` at the
+# calling job (or workflow) level when `upload-artifacts: true`, exactly
+# like `reusable-node`; with `upload-artifacts: false`, plain
+# `contents: read` is enough. See README "Permissions".
+#
+# Every action SHA below comes from pins/ACTIONS.md.
+#
+# Consumer example:
+#
+#   jobs:
+#     uat:
+#       uses: Rylee-Bee/ci-harness/.github/workflows/reusable-uat.yml@main
+#       with:
+#         uat-command: "npm run uat"
+#       secrets:
+#         uat-token: ${{ secrets.UAT_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: GitHub-hosted runner label for the UAT job.
+        type: string
+        required: false
+        default: "ubuntu-latest"
+      node-version:
+        description: Node.js version for setup-node.
+        type: string
+        required: false
+        default: "22"
+      uat-command:
+        description: >-
+          Repo-owned real-browser UAT command, e.g. "npm run uat".
+        type: string
+        required: true
+      working-directory:
+        description: Directory holding package.json, the lockfile, and the UAT config.
+        type: string
+        required: false
+        default: "."
+      uat-output-dir:
+        description: UAT output directory to upload, relative to working-directory.
+        type: string
+        required: false
+        default: "uat-out/"
+      artifact-name:
+        description: Artifact name for the uploaded UAT output.
+        type: string
+        required: false
+        default: "uat-artifacts"
+      upload-artifacts:
+        description: Upload the UAT output as a workflow artifact.
+        type: boolean
+        required: false
+        default: true
+      timeout-minutes:
+        description: Job timeout in minutes.
+        type: number
+        required: false
+        default: 30
+      read-only:
+        description: >-
+          Enforce the read-only posture: abort every non-GET request and
+          record "would have sent: METHOD path" instead (writes fail closed).
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      uat-token:
+        description: Optional bearer token for a live-app read-only walk.
+        required: false
+
+# No top-level `permissions:` key on purpose — see header; the caller's
+# grants flow down and may only be kept or downgraded by this workflow.
+
+jobs:
+  uat:
+    name: agent-driven uat
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # setup-node v7 THROWS "Some specified paths were not resolved, unable
+      # to cache dependencies." when `cache:` is set and no lockfile
+      # resolves — so caching is gated on lockfile presence, the same gate
+      # as `npm ci`. An empty `cache:` value skips caching cleanly.
+      - name: Detect npm lockfile
+        id: lockfile
+        working-directory: "."
+        env:
+          WORKDIR: ${{ inputs.working-directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          present=false
+          path=""
+          cache=""
+          if [ -f "$WORKDIR/package-lock.json" ]; then
+            path="$WORKDIR/package-lock.json"
+          elif [ -f "$WORKDIR/npm-shrinkwrap.json" ]; then
+            path="$WORKDIR/npm-shrinkwrap.json"
+          fi
+          if [ -n "$path" ]; then
+            present=true
+            cache="npm"
+          fi
+          {
+            echo "present=$present"
+            echo "lockfile=${path#./}"
+            echo "cache=$cache"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ steps.lockfile.outputs.cache }}
+          cache-dependency-path: ${{ steps.lockfile.outputs.lockfile }}
+      - name: Install dependencies from lockfile
+        if: ${{ steps.lockfile.outputs.present == 'true' }}
+        run: npm ci
+      - name: Notice when no lockfile
+        if: ${{ steps.lockfile.outputs.present != 'true' }}
+        run: echo "dependencies were not installed because no npm lockfile was found (honest reporting over fake green)"
+      # When `read-only` is true the harness aborts every non-GET request
+      # and records `would have sent: METHOD path` instead of performing
+      # it; writes fail closed. The token travels only through env — never
+      # echoed, never written to a file.
+      - name: Run UAT
+        run: ${{ inputs.uat-command }}
+        env:
+          UAT_READONLY: ${{ inputs.read-only && '1' || '0' }}
+          UAT_TOKEN: ${{ secrets.uat-token }}
+      - name: Upload UAT output
+        if: ${{ always() && inputs.upload-artifacts }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.uat-output-dir }}
+          retention-days: 14
