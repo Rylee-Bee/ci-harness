@@ -52,6 +52,15 @@ on:
           Repo-owned real-browser UAT command, e.g. "npm run uat".
         type: string
         required: true
+      uat-url:
+        description: >-
+          Target URL for the run, passed to the command as $UAT_URL. Prefer this
+          over inlining a URL in `uat-command`: consumers usually must not put
+          deployment topology in a tracked workflow file, so the value normally
+          comes from a repo secret or variable at the call site.
+        type: string
+        required: false
+        default: ""
       working-directory:
         description: Directory holding package.json, the lockfile, and the UAT config.
         type: string
@@ -153,6 +162,7 @@ jobs:
         env:
           UAT_READONLY: ${{ inputs.read-only && '1' || '0' }}
           UAT_TOKEN: ${{ secrets.uat-token }}
+          UAT_URL: ${{ inputs.uat-url }}
       - name: Upload UAT output
         if: ${{ always() && inputs.upload-artifacts }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

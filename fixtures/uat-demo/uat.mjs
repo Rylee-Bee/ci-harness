@@ -33,9 +33,20 @@ if (expected !== undefined && expected !== readOnly) {
 }
 
 const isReadOnly = readOnly === "1";
+
+// Second half of the call contract: the target URL must reach the command as
+// $UAT_URL. Optional for a caller, but if a job says what it expects, the
+// wiring has to actually deliver it.
+const expectedUrl = process.env.FIXTURE_EXPECT_URL;
+if (expectedUrl !== undefined && process.env.UAT_URL !== expectedUrl) {
+  console.error(`uat fixture: template passed UAT_URL=${JSON.stringify(process.env.UAT_URL)} but this job asked for ${JSON.stringify(expectedUrl)} — the uat-url input is not wired through`);
+  process.exit(1);
+}
+
 const report = {
   ok: true,
   readOnly: isReadOnly,
+  url: process.env.UAT_URL || "(none)",
   note: isReadOnly
     ? "would have sent: POST /api/example (blocked by read-only posture)"
     : "writes permitted (read-only explicitly disabled)",

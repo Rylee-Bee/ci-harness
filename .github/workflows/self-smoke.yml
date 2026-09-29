@@ -69,7 +69,8 @@ jobs:
     uses: ./.github/workflows/reusable-uat.yml
     with:
       working-directory: "fixtures/uat-demo"
-      uat-command: "FIXTURE_EXPECT_READONLY=1 npm run uat"
+      uat-command: "FIXTURE_EXPECT_READONLY=1 FIXTURE_EXPECT_URL=http://127.0.0.1:PORT/uat-url-passthrough npm run uat"
+      uat-url: "http://127.0.0.1:PORT/uat-url-passthrough"
       read-only: true
       artifact-name: "fixture-uat"
 
