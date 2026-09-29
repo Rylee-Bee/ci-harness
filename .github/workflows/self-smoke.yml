@@ -100,6 +100,15 @@ jobs:
       manifest-path: "fixtures/contract-demo/stale-adoption.yaml"
       expect: "noncurrent"
 
+  # warn mode: the same stale pin passes, with a warning (PRs in repos
+  # with a pin robot); its status output still says the real verdict.
+  contract-freshness-warn:
+    name: contract freshness — stale pin in warn mode (must pass)
+    uses: ./.github/workflows/reusable-contract-freshness.yml
+    with:
+      manifest-path: "fixtures/contract-demo/stale-adoption.yaml"
+      expect: "warn"
+
   contract-freshness-stale-proven:
     name: assert stale probe exited nonzero
     needs: contract-freshness-stale

@@ -38,6 +38,7 @@ Available templates:
 | `reusable-container-smoke.yml` | docker build + detached run + configurable healthz curl retry loop, with container logs on failure |
 | `reusable-contract-freshness.yml` | shallow-clone the Play-Nice contract source over https, run `contractctl freshness --manifest <caller manifest> --json`; exit 0 only on CURRENT (fail closed) |
 | `reusable-uat.yml` | pinned checkout + setup-node (npm cache, conditional `npm ci`) + a caller-supplied real-browser UAT command under a `UAT_READONLY=1` read-only posture with optional `uat-token` passthrough; UAT output uploaded as an artifact (14-day retention) |
+| `reusable-secret-scan.yml` | pinned checkout + pinned gitleaks-action secret scan; a repo-local `.gitleaks.toml` allowlists documented false positives instead of suppressing at the harness level. `fetch-depth` defaults to 1 (fast PR check); use 0 for a full-history scan |
 
 How this repo proves itself (static checks alone prove nothing for
 `workflow_call`): `actionlint-selfcheck.yml` lints every workflow here with
@@ -69,7 +70,10 @@ when the verdict is CURRENT; BEHIND/DIVERGED exit 1; UNREACHABLE/UNKNOWN
 (missing or malformed manifest included) exit 2. The tool's JSON verdict is
 printed, and `exit-code` / `status` are exposed as job outputs so a caller
 can assert on the verdict without parsing logs. The default `expect: current`
-input means red on ANY drift; `expect: noncurrent` is the harness's own
+input means red on ANY drift; `expect: warn` (for pull requests in a repo
+whose pin moves by robot, `tools/pin-sync` in play-nice-contracts) passes with
+a visible warning and keeps the real verdict in `status`;
+`expect: noncurrent` is the harness's own
 self-smoke inversion (see below) and is not a soft-fail knob.
 
 **Detection is automated; pin movement is manual.** A red freshness job
