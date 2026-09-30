@@ -13,6 +13,6 @@ schema: play-nice/adoption-v1
 project: ci-harness-fixture-current
 source:
   repository: Rylee-Bee/play-nice-contracts
-  revision: c867c2762fd784d697da264b7d34465ac10e54d3   # pin robot 2026-09-29: follows play-nice-contracts main; changed since 057cc37: `git-and-worktrees` 2.0.0 -> 2.1.0; `library` 1.1.0 -> 1.2.0
+  revision: 2084747c565631bbcd3bee7579b0569f0a6e5b97   # pin robot 2026-09-29: follows play-nice-contracts main; changed since c867c27: no contract changed (docs, tooling or tests only)
 always:
   - assume-unknown
