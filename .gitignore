@@ -10,3 +10,7 @@ uat-out/
 # absolute home paths, so it must never reach a public repo.
 data/content.db
 **/data/content.db
+
+# Per-user agent overrides; this repo is public.
+CLAUDE.local.md
+.claude/settings.local.json
