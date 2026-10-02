@@ -11,10 +11,12 @@ name: reusable-uat
 # upload; the repo owns the UAT command itself.
 #
 # Read-only posture: `read-only` (default true) exports UAT_READONLY=1.
-# When read-only is true the harness aborts every non-GET request and
-# records `would have sent: METHOD path` instead of performing it — writes
-# fail closed. The `uat-token` secret is passed only via the step `env:`
-# block: it is never echoed to the log and never written to a file.
+# When read-only is true the harness aborts every non-GET HTTP request and
+# records `would have sent: METHOD path` instead of performing it, blocks
+# service workers, and drops WebSocket messages — non-GET HTTP methods fail
+# closed. This blocks methods/channels, not server mutation: a GET endpoint
+# with side effects still runs. The `uat-token` secret is passed only via the
+# step `env:` block: it is never echoed to the log and never written to a file.
 #
 # Permissions: intentionally NOT declared at this workflow's top level.
 # It uploads artifacts, so the caller must grant `actions: write` at the
@@ -88,8 +90,10 @@ on:
         default: 30
       read-only:
         description: >-
-          Enforce the read-only posture: abort every non-GET request and
-          record "would have sent: METHOD path" instead (writes fail closed).
+          Enforce the read-only posture: abort every non-GET HTTP request and
+          record "would have sent: METHOD path" instead (non-GET HTTP methods
+          fail closed), block service workers, and drop WebSocket messages.
+          Blocks methods/channels, not server mutation.
         type: boolean
         required: false
         default: true
@@ -153,10 +157,13 @@ jobs:
       - name: Notice when no lockfile
         if: ${{ steps.lockfile.outputs.present != 'true' }}
         run: echo "dependencies were not installed because no npm lockfile was found (honest reporting over fake green)"
-      # When `read-only` is true the harness aborts every non-GET request
-      # and records `would have sent: METHOD path` instead of performing
-      # it; writes fail closed. The token travels only through env — never
-      # echoed, never written to a file.
+      # When `read-only` is true the harness aborts every non-GET HTTP
+      # request and records `would have sent: METHOD path` instead of
+      # performing it, blocks service workers, and drops WebSocket
+      # messages; non-GET HTTP methods fail closed. It does not prove the
+      # server was protected from mutation (GET side effects still run).
+      # The token travels only through env — never echoed, never written to
+      # a file.
       - name: Run UAT
         run: ${{ inputs.uat-command }}
         env:
