@@ -32,6 +32,14 @@ name: reusable-contract-freshness
 on:
   workflow_call:
     inputs:
+      runs-on:
+        description: >-
+          Runner label for every job (default GitHub-hosted ubuntu-latest). Private repos pass
+          vars.CI_RUNNER_LIGHT, then vars.CI_RUNNER, then ubuntu-latest, to use a self-hosted
+          runner (2026-10-05: private-repo Actions minutes are a hard monthly budget).
+        type: string
+        required: false
+        default: ubuntu-latest
       manifest-path:
         description: >-
           Adoption-v1 manifest to verify, relative to the calling repo root,
@@ -71,7 +79,7 @@ permissions:
 jobs:
   freshness:
     name: contract freshness
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     outputs:
       exit-code: ${{ steps.check.outputs.exit-code }}
       status: ${{ steps.check.outputs.status }}
