@@ -23,6 +23,14 @@ name: reusable-node
 on:
   workflow_call:
     inputs:
+      runs-on:
+        description: >-
+          Runner label for every job (default GitHub-hosted ubuntu-latest). Private repos pass
+          vars.CI_RUNNER_LIGHT, then vars.CI_RUNNER, then ubuntu-latest, to use a self-hosted
+          runner (2026-10-05: private-repo Actions minutes are a hard monthly budget).
+        type: string
+        required: false
+        default: ubuntu-latest
       node-version:
         description: Node.js version for setup-node.
         type: string
@@ -99,7 +107,7 @@ on:
 jobs:
   build:
     name: node build
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
