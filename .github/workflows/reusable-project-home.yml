@@ -224,7 +224,16 @@ jobs:
 
           response="$RUNNER_TEMP/project-home-response.json"
           set +e
-          code=$(curl --silent --show-error             --output "$response"             --write-out '%{http_code}'             --request POST             --header "Authorization: Bearer $PH_TOKEN"             --header "Content-Type: application/json"             --data-binary @"$RUNNER_TEMP/project-home-request.json"             "$endpoint")
+          # The token reaches curl on stdin (--config -), never in argv: on a self-hosted runner any
+          # process of the same user can read another's command line while it runs.
+          code=$(printf 'header = "Authorization: Bearer %s"\n' "$PH_TOKEN" | curl --config - \
+            --silent --show-error \
+            --output "$response" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --data-binary @"$RUNNER_TEMP/project-home-request.json" \
+            "$endpoint")
           curl_rc=$?
           set -e
 
