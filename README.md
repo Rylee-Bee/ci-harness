@@ -52,6 +52,46 @@ Callers reference templates by `@main` for adoption simplicity; repos that
 want stronger immutability may pin a ci-harness commit SHA in the `uses:`
 line instead — the templates are byte-identical at a SHA.
 
+## Project Home orchestration
+
+The reporter deliberately carries no approval authority. Project Home remains the
+task, approval, lease, and BOOP source of truth; CI gets a dedicated `ci` bearer
+scope and may only operate through the narrow `/api/ci/*` surface.
+
+A caller typically claims a Project Home task before its real job and reports the
+final outcome afterward. The URL and token stay repository secrets, so this public
+harness never records private topology:
+
+```yaml
+jobs:
+  claim:
+    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-project-home.yml@main
+    with:
+      action: claim
+      task-id: "123"
+    secrets:
+      project-home-url: ${{ secrets.PROJECT_HOME_URL }}
+      project-home-token: ${{ secrets.PROJECT_HOME_CI_TOKEN }}
+
+  # ...repo-owned work...
+
+  finish:
+    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-project-home.yml@main
+    with:
+      action: finish
+      task-id: "123"
+      outcome: succeeded
+      note: "tests and smoke checks passed"
+    secrets:
+      project-home-url: ${{ secrets.PROJECT_HOME_URL }}
+      project-home-token: ${{ secrets.PROJECT_HOME_CI_TOKEN }}
+```
+
+The default actor is stable for the workflow run (`gha:<repo>:<run_id>`), so
+separate claim/finish jobs in the same run share one lease identity. Responses
+are written to a temporary file and never echoed; logs expose only the action and
+HTTP status.
+
 ## Contract freshness
 
 Repos that pin a Play-Nice contracts revision (an adoption-v1 manifest with
