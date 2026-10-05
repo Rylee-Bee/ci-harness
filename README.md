@@ -1,6 +1,8 @@
 # ci-harness
 
 Shared GitHub Actions pipeline machinery for the Rylee-Bee estate:
+
+> **Cost discipline:** private-repo CI should preserve proof while folding duplicate billing. Before adding or expanding a workflow, read [docs/ACTIONS-COST-DISCIPLINE.md](docs/ACTIONS-COST-DISCIPLINE.md).
 `workflow_call` reusable workflows plus one single source of truth for
 action SHA pins (`pins/ACTIONS.md`). The rule is **adopt the mechanics, own
 the semantics** — this repo owns checkout/setup/pinning/sync/artifact
