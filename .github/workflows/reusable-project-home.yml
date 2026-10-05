@@ -38,7 +38,7 @@ on:
         required: false
         default: 900
       outcome:
-        description: Finish outcome: succeeded, failed, review, or retry.
+        description: "Finish outcome: succeeded, failed, review, or retry."
         type: string
         required: false
         default: succeeded
