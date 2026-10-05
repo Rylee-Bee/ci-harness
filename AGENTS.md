@@ -16,7 +16,7 @@ Estate rules: `~/.agents/AGENTS.md` and `play-nice-contracts/contracts/everyone/
 
 | Path | Kind | Purpose | Open it? |
 |---|---|---|---|
-| `.github/workflows/reusable-*.yml` | source | the six templates consumers call via `uses:` (python, node, container-smoke, contract-freshness, uat, secret-scan) | yes, when changing a template |
+| `.github/workflows/reusable-*.yml` | source | the seven templates consumers call via `uses:` (python, node, container-smoke, contract-freshness, uat, secret-scan, project-home) | yes, when changing a template |
 | `.github/workflows/self-smoke.yml` | source | **real execution** of every template against `fixtures/` | yes, with any template change |
 | `.github/workflows/actionlint-selfcheck.yml` | source | static lint of all workflows with checksum-pinned actionlint | rarely |
 | `.github/workflows/secret-scan-selfcheck.yml` | source | runs `reusable-secret-scan.yml` on this repo (full history) | rarely |
