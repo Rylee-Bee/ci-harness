@@ -41,6 +41,7 @@ Available templates:
 | `reusable-contract-freshness.yml` | shallow-clone the Play-Nice contract source over https, run `contractctl freshness --manifest <caller manifest> --json`; exit 0 only on CURRENT (fail closed) |
 | `reusable-uat.yml` | pinned checkout + setup-node (npm cache, conditional `npm ci`) + a caller-supplied real-browser UAT command under a `UAT_READONLY=1` read-only posture with optional `uat-token` passthrough; UAT output uploaded as an artifact (14-day retention) |
 | `reusable-secret-scan.yml` | pinned checkout + pinned gitleaks-action secret scan; a repo-local `.gitleaks.toml` allowlists documented false positives instead of suppressing at the harness level. `fetch-depth` defaults to 1 (fast PR check); use 0 for a full-history scan |
+| `reusable-project-home.yml` | narrow Project Home CI reporter: exact task claim/heartbeat/finish plus deduplicated BOOP notice; callers pass the private base URL and a dedicated `ci`-scope token only as secrets |
 
 How this repo proves itself (static checks alone prove nothing for
 `workflow_call`): `actionlint-selfcheck.yml` lints every workflow here with
@@ -50,6 +51,46 @@ template against the fixtures under `fixtures/` on every push/PR.
 Callers reference templates by `@main` for adoption simplicity; repos that
 want stronger immutability may pin a ci-harness commit SHA in the `uses:`
 line instead — the templates are byte-identical at a SHA.
+
+## Project Home orchestration
+
+The reporter deliberately carries no approval authority. Project Home remains the
+task, approval, lease, and BOOP source of truth; CI gets a dedicated `ci` bearer
+scope and may only operate through the narrow `/api/ci/*` surface.
+
+A caller typically claims a Project Home task before its real job and reports the
+final outcome afterward. The URL and token stay repository secrets, so this public
+harness never records private topology:
+
+```yaml
+jobs:
+  claim:
+    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-project-home.yml@main
+    with:
+      action: claim
+      task-id: "123"
+    secrets:
+      project-home-url: ${{ secrets.PROJECT_HOME_URL }}
+      project-home-token: ${{ secrets.PROJECT_HOME_CI_TOKEN }}
+
+  # ...repo-owned work...
+
+  finish:
+    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-project-home.yml@main
+    with:
+      action: finish
+      task-id: "123"
+      outcome: succeeded
+      note: "tests and smoke checks passed"
+    secrets:
+      project-home-url: ${{ secrets.PROJECT_HOME_URL }}
+      project-home-token: ${{ secrets.PROJECT_HOME_CI_TOKEN }}
+```
+
+The default actor is stable for the workflow run (`gha:<repo>:<run_id>`), so
+separate claim/finish jobs in the same run share one lease identity. Responses
+are written to a temporary file and never echoed; logs expose only the action and
+HTTP status.
 
 ## Contract freshness
 

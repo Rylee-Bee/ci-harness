@@ -1,0 +1,250 @@
+name: reusable-project-home
+
+# ci-harness — narrow Project Home orchestration reporter.
+#
+# This workflow does not run or approve work. It only calls Project Home's
+# dedicated CI boundary so a caller can claim one known task, heartbeat its
+# lease, finish that owned task, or queue a safe BOOP notice.
+#
+# Real callers provide both secrets. The self-smoke escape hatch is accepted
+# only when the caller repository itself is Rylee-Bee/ci-harness; it validates
+# request construction without touching the network.
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner label for the reporter job.
+        type: string
+        required: false
+        default: ubuntu-latest
+      action:
+        description: One of claim, heartbeat, finish, notice.
+        type: string
+        required: true
+      task-id:
+        description: Project Home task id for claim/heartbeat/finish.
+        type: string
+        required: false
+        default: ""
+      actor:
+        description: Stable lease owner. Empty derives gha:<repo>:<run_id>.
+        type: string
+        required: false
+        default: ""
+      lease-seconds:
+        description: Lease duration for claim/heartbeat (Project Home caps at 3600).
+        type: number
+        required: false
+        default: 900
+      outcome:
+        description: "Finish outcome: succeeded, failed, review, or retry."
+        type: string
+        required: false
+        default: succeeded
+      note:
+        description: Short safe summary attached to finish.
+        type: string
+        required: false
+        default: ""
+      notice-key:
+        description: Deduplication key for notice.
+        type: string
+        required: false
+        default: ""
+      notice-category:
+        description: completion, interrupted, blocker, deployment, or mission.
+        type: string
+        required: false
+        default: mission
+      notice-title:
+        description: Safe notification title.
+        type: string
+        required: false
+        default: ""
+      notice-body:
+        description: Safe notification body.
+        type: string
+        required: false
+        default: ""
+      notice-link:
+        description: Relative Project Home deep link, beginning with /.
+        type: string
+        required: false
+        default: ""
+      self-smoke:
+        description: Internal ci-harness contract test only; forbidden to other callers.
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      project-home-url:
+        description: Project Home base URL. Required unless internal self-smoke is true.
+        required: false
+      project-home-token:
+        description: Project Home bearer token carrying only the ci scope.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Project Home ${{ inputs.action }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Build and send bounded Project Home request
+        shell: bash
+        env:
+          PH_ACTION: ${{ inputs.action }}
+          PH_TASK_ID: ${{ inputs.task-id }}
+          PH_ACTOR_INPUT: ${{ inputs.actor }}
+          PH_LEASE_SECONDS: ${{ inputs.lease-seconds }}
+          PH_OUTCOME: ${{ inputs.outcome }}
+          PH_NOTE: ${{ inputs.note }}
+          PH_NOTICE_KEY: ${{ inputs.notice-key }}
+          PH_NOTICE_CATEGORY: ${{ inputs.notice-category }}
+          PH_NOTICE_TITLE: ${{ inputs.notice-title }}
+          PH_NOTICE_BODY: ${{ inputs.notice-body }}
+          PH_NOTICE_LINK: ${{ inputs.notice-link }}
+          PH_SELF_SMOKE: ${{ inputs.self-smoke && '1' || '0' }}
+          PH_URL: ${{ secrets.project-home-url }}
+          PH_TOKEN: ${{ secrets.project-home-token }}
+        run: |
+          set -euo pipefail
+
+          case "$PH_ACTION" in
+            claim|heartbeat|finish|notice) ;;
+            *)
+              echo "::error::action must be claim, heartbeat, finish, or notice"
+              exit 2
+              ;;
+          esac
+
+          actor="$PH_ACTOR_INPUT"
+          if [ -z "$actor" ]; then
+            actor="gha:${GITHUB_REPOSITORY}:${GITHUB_RUN_ID}"
+          fi
+
+          case "$PH_ACTION" in
+            claim|heartbeat|finish)
+              if ! [[ "$PH_TASK_ID" =~ ^[0-9]+$ ]]; then
+                echo "::error::task-id must be a numeric Project Home task id"
+                exit 2
+              fi
+              ;;
+          esac
+
+          if [ "$PH_ACTION" = "finish" ]; then
+            case "$PH_OUTCOME" in
+              succeeded|failed|review|retry) ;;
+              *)
+                echo "::error::outcome must be succeeded, failed, review, or retry"
+                exit 2
+                ;;
+            esac
+          fi
+
+          if [ "$PH_ACTION" = "notice" ]; then
+            case "$PH_NOTICE_CATEGORY" in
+              completion|interrupted|blocker|deployment|mission) ;;
+              *)
+                echo "::error::notice-category is not allowed"
+                exit 2
+                ;;
+            esac
+            if [ -z "$PH_NOTICE_KEY" ] || [ -z "$PH_NOTICE_TITLE" ]; then
+              echo "::error::notice requires notice-key and notice-title"
+              exit 2
+            fi
+          fi
+
+          export PH_ACTOR="$actor"
+          export PH_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          python3 - <<'PY' > "$RUNNER_TEMP/project-home-request.json"
+          import json
+          import os
+
+          action = os.environ["PH_ACTION"]
+          if action in {"claim", "heartbeat"}:
+              payload = {
+                  "actor": os.environ["PH_ACTOR"],
+                  "lease_seconds": int(os.environ["PH_LEASE_SECONDS"]),
+              }
+          elif action == "finish":
+              payload = {
+                  "actor": os.environ["PH_ACTOR"],
+                  "outcome": os.environ["PH_OUTCOME"],
+                  "note": os.environ["PH_NOTE"],
+                  "run_url": os.environ["PH_RUN_URL"],
+              }
+          else:
+              payload = {
+                  "key": os.environ["PH_NOTICE_KEY"],
+                  "category": os.environ["PH_NOTICE_CATEGORY"],
+                  "title": os.environ["PH_NOTICE_TITLE"],
+                  "body": os.environ["PH_NOTICE_BODY"],
+                  "link": os.environ["PH_NOTICE_LINK"],
+              }
+          print(json.dumps(payload, separators=(",", ":")))
+          PY
+
+          if [ "$PH_SELF_SMOKE" = "1" ]; then
+            if [ "$GITHUB_REPOSITORY" != "Rylee-Bee/ci-harness" ]; then
+              echo "::error::self-smoke is reserved for ci-harness"
+              exit 2
+            fi
+            python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path(os.environ["RUNNER_TEMP"], "project-home-request.json").read_text())
+          if os.environ["PH_ACTION"] == "notice":
+              assert payload["key"] == os.environ["PH_NOTICE_KEY"]
+              assert payload["title"] == os.environ["PH_NOTICE_TITLE"]
+          print("Project Home reporter self-smoke: request construction OK")
+          PY
+            exit 0
+          fi
+
+          if [ -z "$PH_URL" ] || [ -z "$PH_TOKEN" ]; then
+            echo "::error::project-home-url and project-home-token secrets are required"
+            exit 2
+          fi
+
+          base="${PH_URL%/}"
+          case "$PH_ACTION" in
+            claim) endpoint="$base/api/ci/tasks/$PH_TASK_ID/claim" ;;
+            heartbeat) endpoint="$base/api/ci/tasks/$PH_TASK_ID/heartbeat" ;;
+            finish) endpoint="$base/api/ci/tasks/$PH_TASK_ID/finish" ;;
+            notice) endpoint="$base/api/ci/notice" ;;
+          esac
+
+          response="$RUNNER_TEMP/project-home-response.json"
+          set +e
+          # The token reaches curl on stdin (--config -), never in argv: on a self-hosted runner any
+          # process of the same user can read another's command line while it runs.
+          code=$(printf 'header = "Authorization: Bearer %s"\n' "$PH_TOKEN" | curl --config - \
+            --silent --show-error \
+            --output "$response" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --data-binary @"$RUNNER_TEMP/project-home-request.json" \
+            "$endpoint")
+          curl_rc=$?
+          set -e
+
+          if [ "$curl_rc" -ne 0 ]; then
+            echo "::error::Project Home request failed at the transport layer"
+            exit "$curl_rc"
+          fi
+          case "$code" in
+            2??) echo "Project Home accepted CI action '$PH_ACTION' (HTTP $code)" ;;
+            *)
+              echo "::error::Project Home rejected CI action '$PH_ACTION' (HTTP $code)"
+              exit 1
+              ;;
+          esac
