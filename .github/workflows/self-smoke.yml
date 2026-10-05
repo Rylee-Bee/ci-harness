@@ -29,6 +29,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  project-home:
+    name: Project Home reporter contract
+    uses: ./.github/workflows/reusable-project-home.yml
+    with:
+      action: notice
+      notice-key: self-smoke
+      notice-title: "ci-harness self-smoke"
+      notice-body: "request construction only"
+      self-smoke: true
+
   python:
     name: python template
     uses: ./.github/workflows/reusable-python.yml
