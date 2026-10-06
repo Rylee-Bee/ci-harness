@@ -213,6 +213,13 @@ def fq(version: str) -> str:
     return ".".join(version.split(".")[:2])
 ```
 
+One honest limitation of the prototype itself, recorded rather than smoothed over:
+`all_jobs()` returns a list of stdout strings and `dagger.gather` raises on the first
+failure, so it does **not** keep per-job outcomes the way three GitHub jobs do. GitHub
+reports each job separately and the self-smoke inverts on that; this module collapses
+all three into one result. That is a defect in the prototype, not a property of Dagger,
+and it makes the prototype numbers optimistic rather than pessimistic.
+
 Note what the module *cannot* express, which is the substance of the finding:
 it has no `permissions:` block, no `runs-on:` selector (the `runs-on` input
 that lets private repos pass `vars.CI_RUNNER_LIGHT` then `vars.CI_RUNNER`, see
@@ -343,8 +350,8 @@ guessed.
 
 | Dimension | Current (`reusable-python.yml`) | Dagger prototype | Verdict |
 |---|---|---|---|
-| Total lines this template would keep maintained | 157 - the whole file: 73 input lines (15-87), 2 permissions, 67 job bodies (91-157), 15 header and trigger | The 73-line input interface and the workflow wrapper survive; the port **adds** 77 lines of module, plus a workspace file and a lockfile | **Strictly more.** Nothing is deleted. Counting only the job bodies made this look like +10; counting everything this template would still need maintained makes the direction unambiguous |
-| Configuration removed | none; inputs are the contract | none; 10 module fields mirror the same inputs | **No change.** Same public interface, new place to maintain it |
+| Total lines this template would keep maintained | 157 - the whole file: 73 input lines (15-87), 2 permissions, 67 job bodies (91-157), 15 header and trigger | At least 90 lines of YAML survive unchanged (73 input + 2 permissions + 15 header and trigger), and the port **adds** 77 lines of module, a workspace file, a lockfile, and a per-job wrapper whose size is unknown because the port was never run | **Strictly more, provably.** 90 + 77 = 167 already exceeds 157 before the wrapper, the workspace file or the lockfile are counted. Nothing is deleted |
+| Configuration removed | none; inputs are the contract | none; 10 module fields, but they do **not** mirror the inputs one-for-one: `runs-on` and `uv-version` have no module field at all, and `source` is new | **No change, and slightly worse.** Same public interface plus a field Dagger needed that the YAML does not have |
 | Duplicated scripts removed | n/a — this repo has no `scripts/` directory and no composite actions | n/a | **Not applicable.** No saving exists to claim |
 | Caching behaviour | Implicit: `actions/setup-python` cache + runner image; no explicit cache | Explicit `with_mounted_cache("/root/.cache/uv", ...)` | **Better in principle**, but a new cache-key concept and a self-hosted cache-lifetime question. UNVERIFIED without a run |
 | Container and service setup | None; runs on the bare runner | Each job becomes a container from a base image | **Worse.** New layer; image pinning moves into `dagger.lock` |
@@ -352,7 +359,7 @@ guessed.
 | Logs and debugging | `actions/setup-*` step logs in the run UI; trivially greppable | TUI spans plus Dagger Cloud URLs | **Worse for this estate.** Cloud is a second login |
 | Failure semantics | Native: one red `uses:` job fails the run; `continue-on-error` is forbidden on `uses:` jobs (`self-smoke.yml` lines 8-14 relies on this) | Engine-level exceptions; GitHub sees one `dagger call` exit code | **Materially worse.** Loses the per-job inversion trick the self-smoke depends on |
 | Local/CI parity | Partial: `AGENTS.md` lines 41-44 give manual fixture commands, CI is the gate | Claimed as a headline feature | **UNVERIFIED.** Could not run locally |
-| Startup overhead | ~0; steps are native actions | Engine container pull + start per run | **Worse.** A cold Dagger engine is seconds to tens of seconds before any work starts |
+| Startup overhead | ~0; steps are native actions | Engine container pull + start per run | **UNVERIFIED.** An engine start is a real cost and there is no measurement here - the engine could not be started in this environment. Direction is almost certainly worse than native steps; the magnitude is unknown |
 | Dependency and update burden | 5 pinned action SHAs in one table (`pins/ACTIONS.md`), bumped in one commit | Action pins *plus* a Dagger CLI pin *plus* `dagger.lock` image pins *plus* SDK pins | **Worse.** One table becomes three |
 | Accessibility of failure output | GitHub run UI, per step | TUI or Cloud trace URL | **Worse.** Breaks the current "read CI with `gh pr checks`" habit in `AGENTS.md` line 46 |
 | Compatibility with pinned tooling | uv 0.11.28, CPython 3.12, action SHAs, all centrally pinned | Must re-pin uv into a base image tag; `uv_version` becomes unused | **Worse.** Conflicts with the single-source-of-truth pin design |
@@ -424,9 +431,13 @@ For an estate that runs self-hosted runners and treats private Actions minutes
 as a hard budget, the self-hosting documentation being empty is a direct risk,
 not an abstract one.
 
-**The CLI is ahead-of/behind its own docs**, as shown above: `dagger settings`,
-`dagger workspace`, `dagger sdk`, `dagger list` and `dagger module init
---name` are all documented and none of them work in `v0.21.10`.
+**The shipped CLI rejects commands its own documentation tells you to run.** In
+`v0.21.10` these each returned `unknown command` (and `dagger module init --name`
+returned `unknown flag`), where the docs instruct them: `dagger settings`,
+`dagger workspace`, `dagger sdk`, `dagger list`. The doc pages consulted are
+listed under Sources; the point is the mismatch between the shipped binary and
+the documentation for that same binary, not that any particular command is
+missing.
 
 ## Migration and rollback path
 
@@ -577,7 +588,7 @@ that tracing is closed off, only that no export path to the estate Collector
 was demonstrated. Under the rule Rylee set, a technology that adds a service and
 removes no meaningful complexity is rejected by default.
 
-REJECT -- porting `reusable-python.yml` to Dagger deletes nothing and raises total maintained lines, since the 73-line input interface and the workflow wrapper survive while 77 lines of module, a workspace file and a lockfile are added; the documented trace surface is the Dagger TUI and Dagger Cloud, and whether pipeline spans can reach an arbitrary OTLP endpoint is UNVERIFIED rather than disproved.
+REJECT -- porting `reusable-python.yml` to Dagger deletes nothing and provably raises total maintained lines: at least 90 lines of YAML survive unchanged and the port adds 77 lines of module, so 167 already exceeds the current 157 before a workspace file, a lockfile or any per-job wrapper are counted; the documented trace surface is the Dagger TUI and Dagger Cloud, and whether pipeline spans can reach an arbitrary OTLP endpoint is UNVERIFIED rather than disproved.
 
 ## Unresolved
 
