@@ -13,6 +13,6 @@ schema: play-nice/adoption-v1
 project: ci-harness-fixture-current
 source:
   repository: Rylee-Bee/play-nice-contracts
-  revision: a11563b1ab8e5fe4fd235d04972de062a93376eb   # re-pinned 2026-10-05 with Rylee's OK: follows play-nice-contracts main; changed since 1190e6a: `plain-language` 2.0.0 -> 2.1.0, `depth-on-demand` 2.0.0 -> 2.1.0 (the Scotty Principle, #52)
+  revision: b27eb86a56ef235cead4daf7791bf15805577143   # re-pinned 2026-10-06 with Rylee's OK: follows play-nice-contracts main; changed since a11563b: two research docs only (#54 receipt-shape survey, #60 CUE study), no contract changes
 always:
   - assume-unknown
