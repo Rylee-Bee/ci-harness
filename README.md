@@ -25,7 +25,7 @@ permissions:
   contents: read
 jobs:
   test:
-    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-python.yml@main
+    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-python.yml@561b1daa2314f5e902c5b1e4e2a24802a9ecdfaf  # pinned SHA
     with:
       sync-args: "--extra test --extra crypto"
       pytest-args: "--timeout=30"
@@ -48,8 +48,11 @@ How this repo proves itself (static checks alone prove nothing for
 a checksum-pinned actionlint, and `self-smoke.yml` **really executes** each
 template against the fixtures under `fixtures/` on every push/PR.
 
-Callers reference templates by `@main` for adoption simplicity; repos that
-want stronger immutability may pin a ci-harness commit SHA in the `uses:`
+Callers pin templates to a ci-harness **commit SHA** in `uses:`, and that is what the
+estate actually does — this README used to show `@main`, which no consumer used. Measured
+2026-10-06: 28 workflow files across 20 repos, 5 distinct commit SHAs. Consequence worth
+stating plainly: **a merge to this repo's `main` changes no consumer's next run** until
+those consumers re-pin. Treat a pin bump as a deliberate, reviewable step.
 line instead — the templates are byte-identical at a SHA.
 
 ## Project Home orchestration
@@ -65,7 +68,7 @@ harness never records private topology:
 ```yaml
 jobs:
   claim:
-    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-project-home.yml@main
+    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-project-home.yml@aa30fbeafdb022128fce119a10b9008a7d466b94  # pinned SHA
     with:
       action: claim
       task-id: "123"
@@ -76,7 +79,7 @@ jobs:
   # ...repo-owned work...
 
   finish:
-    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-project-home.yml@main
+    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-project-home.yml@aa30fbeafdb022128fce119a10b9008a7d466b94  # pinned SHA
     with:
       action: finish
       task-id: "123"
@@ -101,7 +104,7 @@ on a weekly schedule and whenever the manifest itself changes:
 
 ```yaml
   contract-freshness:
-    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-contract-freshness.yml@main
+    uses: Rylee-Bee/ci-harness/.github/workflows/reusable-contract-freshness.yml@561b1daa2314f5e902c5b1e4e2a24802a9ecdfaf  # pinned SHA
     with:
       manifest-path: .project/contracts/adoption.yaml
 ```

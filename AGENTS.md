@@ -47,10 +47,16 @@ Read CI results with `gh run list -R Rylee-Bee/ci-harness` or `gh pr checks <n>`
 
 ## Boundaries
 
-- **Consumers call templates at `@main`** — a merge here changes every consumer's next run.
-  Known caller (2026-09-29): `personal-world` (`validate.yml`, `uat-live.yml`). Re-check
-  before a breaking change:
-  `gh search code "Rylee-Bee/ci-harness/.github/workflows" --owner Rylee-Bee`.
+- **Consumers call templates at a pinned SHA.** This was once documented as `@main`; it
+  never was, in practice. Measured 2026-10-06 across the 40 `Rylee-Bee` repos: **28**
+  workflow files reference these templates at **5 distinct commit SHAs** (12 distinct
+  `workflow@revision` pins), spanning 2026-09-29 → 2026-10-05. The only `@main` reference
+  in the estate is this repo's own `self-smoke.yml`, which is a legitimate self-test.
+  **A merge to `main` is therefore not a deployment event for anyone** — consumers keep
+  running the revision they pinned until they re-pin. Before a breaking change, find every
+  pinned consumer:
+  `gh search code "Rylee-Bee/ci-harness/.github/workflows" --owner Rylee-Bee`
+  and expect to move pins deliberately, not automatically.
 - Template inputs/outputs/secrets are a public interface: add inputs with safe defaults;
   renaming or removing one is breaking — record the consumer companion edits, don't make
   them (sibling repos need explicit authorization).
