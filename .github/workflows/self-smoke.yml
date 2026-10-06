@@ -93,12 +93,17 @@ jobs:
                   # The reporter is one step doing all four actions, so its spans
                   # are emitted inside that step rather than as a closing one; the
                   # assertion there is that it emits them AND hands Project Home a
-                  # traceparent. Every other template has the closing pair.
+                  # traceparent plus the Estate-Task ids in the header the body
+                  # consumer never has to learn about. Every other template has
+                  # the closing pair.
                   if path.endswith("reusable-project-home.yml"):
                       script = "\n".join(str(s.get("run", "")) for s in body.get("steps", []))
-                      for needle in ("ci-emit", "traceparent", "|| true"):
+                      for needle in ("ci-emit", "traceparent", "Estate-Task", "|| true"):
                           if needle not in script:
                               problems.append(f"{path}:{job} never sends {needle!r}")
+                      # One interface: the ids ride the header, never the body.
+                      if "mission_id" in script.split("self-smoke is reserved")[0]:
+                          problems.append(f"{path}:{job} puts a mission id in a request body")
                       continue
 
                   spans = steps.get("OpenTelemetry spans")

@@ -527,18 +527,26 @@ cmd_ci_emit() {
   return 0
 }
 
-# --------------------------------------------------------------------------------------- project home request
+# --------------------------------------------------------------------------------------- project home header
 
-# The body of the Project Home /api/ci call, built from the same context
-# env-file the trace was derived from — so the two correlation ids on the wire
-# cannot disagree with the ids this run's spans are recorded under.
+# The value of the `Estate-Task` request header for the Project Home /api/ci
+# call, on stdout — or nothing at all.
 #
-# With an Estate-Task trailer both `mission_id` and `mission_task_id` are sent.
-# With none, *neither key is written at all*: a missing id is honest, an empty
-# string or a repo/run-id stand-in would point a backend at a task this run is
-# not working on. §2 is why this matters — a mission runs for days, so no single
-# trace spans it, and the ids are the only thing that joins its spans.
-cmd_project_home_body() {
+# One interface, and it is the one Project Home already reads
+# (app/projecthome/telemetry.py, ESTATE_TASK_HEADER; correlation() falls back to
+# the header whenever the body pair is absent). The reporter therefore does NOT
+# grow a `mission_id` / `mission_task_id` body pair: a CI consumer that knows
+# nothing about telemetry must see a body it recognises, and a second way to
+# say the same thing is a second thing that can disagree with the first.
+#
+# With an Estate-Task trailer the value is that trailer, read from the same
+# context env-file the trace was derived from — so the ids on the wire cannot
+# disagree with the ids this run's spans are recorded under. §2 is why this
+# matters: a mission runs for days, so no single trace spans it, and the ids are
+# the only thing that joins its spans. With no trailer the value is empty and the
+# caller sends no header: a missing id is honest, an empty value or a
+# repo/run-id stand-in would point a backend at a task this run is not working on.
+cmd_project_home_header() {
   local ctx=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -555,55 +563,21 @@ cmd_project_home_body() {
     tid=$(sed -n "s/^otel_task_id='\(.*\)'\$/\1/p" "$ctx" 2>/dev/null || true)
   fi
 
-  PH_ESTATE_MISSION="$mission" PH_ESTATE_TASK="$tid" python3 - <<'BODY_PY'
-import json
+  PH_ESTATE_MISSION="$mission" PH_ESTATE_TASK="$tid" python3 - <<'HDR_PY'
 import os
 import re
 
-# The same trailer grammar cmd_context accepts, re-checked here: these ids name a
-# mission task, so anything that is not the id itself is dropped rather than
-# forwarded. Half a pair is no pair.
+# The same trailer grammar cmd_context accepts, re-checked here: this value goes
+# in a header on the wire, so anything that is not the id itself is dropped
+# rather than forwarded. Half a pair is no pair.
 IDS = re.compile(r"^[A-Za-z0-9._-]+$")
 
-
-def correlation():
-    mission = os.environ.get("PH_ESTATE_MISSION", "")
-    task = os.environ.get("PH_ESTATE_TASK", "")
-    if not (mission and task and IDS.match(mission) and IDS.match(task)):
-        return {}
-    return {"mission_id": mission, "mission_task_id": task}
-
-
-action = os.environ["PH_ACTION"]
-payload = None
-if action in {"claim", "heartbeat"}:
-    payload = {
-        "actor": os.environ["PH_ACTOR"],
-        "lease_seconds": int(os.environ["PH_LEASE_SECONDS"]),
-    }
-elif action == "finish":
-    payload = {
-        "actor": os.environ["PH_ACTOR"],
-        "outcome": os.environ["PH_OUTCOME"],
-        "note": os.environ["PH_NOTE"],
-        "run_url": os.environ["PH_RUN_URL"],
-    }
-else:
-    # A notice belongs to no task. There is nothing to correlate it to, and a
-    # correlation key with no meaning behind it is worse than none at all.
-    payload = {
-        "key": os.environ["PH_NOTICE_KEY"],
-        "category": os.environ["PH_NOTICE_CATEGORY"],
-        "title": os.environ["PH_NOTICE_TITLE"],
-        "body": os.environ["PH_NOTICE_BODY"],
-        "link": os.environ["PH_NOTICE_LINK"],
-    }
-
-if action != "notice":
-    payload.update(correlation())
-
-print(json.dumps(payload, separators=(",", ":")))
-BODY_PY
+mission = os.environ.get("PH_ESTATE_MISSION", "")
+task = os.environ.get("PH_ESTATE_TASK", "")
+if not (mission and task and IDS.match(mission) and IDS.match(task)):
+    raise SystemExit(0)
+print(f"{mission}/{task}")
+HDR_PY
 }
 
 # --------------------------------------------------------------------------------------- usage
@@ -612,14 +586,13 @@ usage() {
   cat <<'EOF'
 otel-span.sh — the estate OpenTelemetry span emitter (bash + curl, standard library only)
 
-  --self-test                     start a throwaway OTLP receiver and prove the bodies
+  --self-test                     start a throwaway receiver and prove the spans, and the
+                             Project Home request, that actually go on the wire
   context   --env-file F [--task <mission>/<task>] [--job-key K]
   ci-emit   --env-file F [--role pipeline|job] [--result S] [--end-ns N] [--attr k=v]...
-  project-home-body [--env-file F]   the Project Home /api/ci request body, on stdout.
-                             Reads PH_ACTION, PH_ACTOR, PH_LEASE_SECONDS, PH_OUTCOME,
-                             PH_NOTE, PH_RUN_URL, PH_NOTICE_{KEY,CATEGORY,TITLE,BODY,LINK}
-                             from the environment, and carries mission_id /
-                             mission_task_id only when F holds them.
+  project-home-header [--env-file F]  the value of the Project Home /api/ci `Estate-Task`
+                             request header, on stdout: "<mission>/<task>" when F
+                             holds both ids, and nothing at all when it does not.
   emit      --name N --trace-id H32 --span-id H16 [--parent-span-id H16]
             --start-ns N --end-ns N [--attr k=v]... [--error MSG]
   task-traceparent <mission> <task>
@@ -641,7 +614,7 @@ main() {
     emit) cmd_emit "$@" ;;
     context) cmd_context "$@" ;;
     ci-emit) cmd_ci_emit "$@" ;;
-    project-home-body) cmd_project_home_body "$@" ;;
+    project-home-header) cmd_project_home_header "$@" ;;
     task-traceparent)
       [ $# -ge 2 ] || die "task-traceparent needs a mission id and a task id"
       read -r t s <<<"$(task_ids "${1-}" "${2-}")"
@@ -746,9 +719,14 @@ assert_eq() { # want got label
 bodies() { cat "$RX_DIR/bodies.jsonl" 2>/dev/null; }
 body_count() { bodies | grep -c . ; }
 
-# One Project Home request body, built exactly as the reporter builds it: the
-# same inputs the template exports, the same helper, the same env-file.
-ph_body() { # $1 action, $2 context env-file
+# The `Estate-Task` header value for a context env-file, read through the same
+# helper the reporter step calls.
+ph_header() { bash "$SELF" project-home-header --env-file "$1"; }
+
+# One Project Home request body, built exactly as the reporter builds it: the CI
+# fields, and nothing else. Telemetry goes in headers, never in here — a body
+# consumer must not have to learn a new field.
+ph_body() { # $1 action
   env PH_ACTION="$1" \
     PH_ACTOR="gha:Rylee-Bee/vefr:7" PH_LEASE_SECONDS=900 \
     PH_OUTCOME="succeeded" PH_NOTE="" \
@@ -756,12 +734,65 @@ ph_body() { # $1 action, $2 context env-file
     PH_NOTICE_KEY="self-smoke" PH_NOTICE_CATEGORY="mission" \
     PH_NOTICE_TITLE="ci-harness self-smoke" PH_NOTICE_BODY="request construction only" \
     PH_NOTICE_LINK="" \
-    bash "$SELF" project-home-body --env-file "$2"
+    python3 - <<'BODY_PY'
+import json
+import os
+
+action = os.environ["PH_ACTION"]
+if action in {"claim", "heartbeat"}:
+    payload = {
+        "actor": os.environ["PH_ACTOR"],
+        "lease_seconds": int(os.environ["PH_LEASE_SECONDS"]),
+    }
+elif action == "finish":
+    payload = {
+        "actor": os.environ["PH_ACTOR"],
+        "outcome": os.environ["PH_OUTCOME"],
+        "note": os.environ["PH_NOTE"],
+        "run_url": os.environ["PH_RUN_URL"],
+    }
+else:
+    payload = {
+        "key": os.environ["PH_NOTICE_KEY"],
+        "category": os.environ["PH_NOTICE_CATEGORY"],
+        "title": os.environ["PH_NOTICE_TITLE"],
+        "body": os.environ["PH_NOTICE_BODY"],
+        "link": os.environ["PH_NOTICE_LINK"],
+    }
+print(json.dumps(payload, separators=(",", ":")))
+BODY_PY
 }
 
-# A body's two correlation keys, or one "-" for each key that is absent.
-ph_ids() {
-  python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); print(b.get("mission_id","-"), b.get("mission_task_id","-"))' "$1"
+# The reporter's own POST, token aside: both telemetry headers ride the
+# `--config -` pipe the template uses, so nothing lands in argv. A notice is a
+# task-less call, so it sends neither.
+ph_send() { # $1 context env-file, $2 action, $3 body-file
+  local tp hdr
+  tp=$(sed -n "s/^otel_traceparent='\(.*\)'\$/\1/p" "$1" 2>/dev/null || true)
+  hdr=$(ph_header "$1")
+  {
+    if [ -n "$tp" ]; then
+      printf 'header = "traceparent: %s"\n' "$tp"
+    fi
+    if [ "$2" != "notice" ] && [ -n "$hdr" ]; then
+      printf 'header = "Estate-Task: %s"\n' "$hdr"
+    fi
+    return 0
+  } | curl --config - \
+    --silent --show-error \
+    --output /dev/null --write-out '%{http_code}' \
+    --request POST --header "Content-Type: application/json" \
+    --data-binary @"$3" "$RX_URL"
+}
+
+# What arrived: the header value, or "-" when the header was absent at all, and
+# the body's keys in sorted order.
+ph_received() {
+  bodies | tail -n1 | python3 -c '
+import json,sys
+r = json.loads(sys.stdin.read())
+h = {k.lower(): v for k, v in r["headers"].items()}
+print(h.get("traceparent", "-"), h.get("estate-task", "-"), " ".join(sorted(r["body"])))'
 }
 
 self_test() {
@@ -946,59 +977,133 @@ Estate-Task: m9/T7"
   assert_eq "otel_change_id='314'" "$(grep '^otel_change_id=' "$tmp/ctx-untrailered.env")" \
     "an untrailered run is still linked back by vcs.change.id"
 
-  # --- 8. the Project Home request body carries the task ids, and only when
-  # there are any. A span in the right trace with no ids is a span a backend
-  # cannot join to anything once the trace is gone, and a mission runs for days,
-  # so these two keys are the only thing that outlives the trace.
-  local ph_action
-  for ph_action in claim heartbeat finish; do
-    ph_body "$ph_action" "$tmp/ctx-git.env" >"$tmp/ph-$ph_action.json"
-    got=$(ph_ids "$tmp/ph-$ph_action.json")
-    assert_eq "m9 T7" "$got" "with the trailer, a $ph_action body carries mission_id and mission_task_id from it"
-
-    ph_body "$ph_action" "$tmp/ctx-untrailered.env" >"$tmp/ph-$ph_action-un.json"
-    got=$(ph_ids "$tmp/ph-$ph_action-un.json")
-    assert_eq "- -" "$got" "with no trailer, a $ph_action body carries neither key — no stand-in, no empty string"
-  done
-
-  ph_body notice "$tmp/ctx-git.env" >"$tmp/ph-notice.json"
-  assert_eq "- -" "$(ph_ids "$tmp/ph-notice.json")" \
-    "a notice belongs to no task and carries neither key, trailer or not"
-  assert_eq "self-smoke" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["key"])' "$tmp/ph-notice.json")" \
-    "the notice body is otherwise unchanged by the ids going into the other three"
-
-  # The whole request as it goes on the wire: the ids in the body, and the
-  # traceparent still in the header, derived from the same ids and untouched by
-  # any of this. The helper stays out of argv for the bearer token; the
-  # traceparent rides the same `--config -` pipe the template uses.
+  # --- 8. the correlation ids ride the Estate-Task request header, and only the
+  # header. A span in the right trace with no ids is a span a backend cannot
+  # join to anything once the trace is gone, and a mission runs for days, so no
+  # single trace spans it. The ids are the header Project Home already reads;
+  # they are NOT a new body field, because a body consumer that knows nothing
+  # about telemetry must still see a body it recognises.
   local ph_traceparent ph_span
   ph_traceparent=$(sed -n "s/^otel_traceparent='\(.*\)'\$/\1/p" "$tmp/ctx-git.env")
   ph_span=$(sed -n "s/^otel_span_id='\(.*\)'\$/\1/p" "$tmp/ctx-git.env")
   assert_eq "00-$(printf 'estate-task|m9|T7' | sha256sum | cut -d' ' -f1 | cut -c1-32)-${ph_span}-01" "$ph_traceparent" \
     "the traceparent still rides the mission task's trace, unchanged by this"
 
+  assert_eq "m9/T7" "$(ph_header "$tmp/ctx-git.env")" \
+    "the helper reads the Estate-Task header value off the context, from the trailer"
+  assert_eq "" "$(ph_header "$tmp/ctx-untrailered.env")" \
+    "with no trailer the header value is empty — no invented ids, no empty pair"
+  assert_eq "" "$(ph_header "$tmp/no-such-context.env")" \
+    "no context at all is an empty header value, not an invented one"
+  # Half a pair is no pair: one id alone never becomes a header that points a
+  # backend at a task this run is not working on.
+  printf 'otel_mission_id=%s\notel_task_id=%s\n' "'m9'" "''" >"$tmp/ctx-half.env"
+  assert_eq "" "$(ph_header "$tmp/ctx-half.env")" "half a pair is no pair: no Estate-Task header goes out"
+
   : >"$RX_DIR/bodies.jsonl"
-  local code
-  code=$(
-    printf 'header = "traceparent: %s"\n' "$ph_traceparent" | curl --config - \
-      --silent --show-error --output /dev/null --write-out '%{http_code}' \
-      --request POST --header "Content-Type: application/json" \
-      --data-binary @"$tmp/ph-claim.json" "$RX_URL")
-  assert_eq "200" "$code" "the reporter's POST to Project Home still carries a body and a traceparent"
+  local ph_action ph_want ph_un_traceparent
+  ph_un_traceparent=$(sed -n "s/^otel_traceparent='\(.*\)'\$/\1/p" "$tmp/ctx-untrailered.env")
+  for ph_action in claim heartbeat finish; do
+    case "$ph_action" in
+      claim | heartbeat) ph_want="actor lease_seconds" ;;
+      finish) ph_want="actor note outcome run_url" ;;
+    esac
+    ph_body "$ph_action" >"$tmp/ph-$ph_action.json"
 
-  got=$(bodies | tail -n1 | python3 -c '
-import json,sys
-r = json.loads(sys.stdin.read())
-print(r["headers"].get("traceparent", "-"), r["body"].get("mission_id", "-"),
-      r["body"].get("mission_task_id", "-"), r["body"]["actor"], r["body"]["lease_seconds"])')
-  assert_eq "${ph_traceparent} m9 T7 gha:Rylee-Bee/vefr:7 900" "$got" \
-    "the request that arrived carries the traceparent in the header and both ids in the body"
+    assert_eq "200" "$(ph_send "$tmp/ctx-git.env" "$ph_action" "$tmp/ph-$ph_action.json")" \
+      "a $ph_action request with the trailer still reaches Project Home"
+    got=$(ph_received)
+    assert_eq "m9/T7" "$(printf '%s' "$got" | cut -d' ' -f2)" \
+      "with the trailer, the $ph_action request carries Estate-Task: <mission>/<task> matching it"
+    assert_eq "$ph_want" "$(printf '%s' "$got" | cut -d' ' -f3-)" \
+      "the $ph_action body is the CI body and nothing else — no mission_id, no mission_task_id"
 
-  printf '\n--- one real Project Home request body this self-test captured ---\n'
-  printf 'POST /api/ci/tasks/42/claim\ntraceparent: %s\n\n' "$ph_traceparent"
+    assert_eq "200" "$(ph_send "$tmp/ctx-untrailered.env" "$ph_action" "$tmp/ph-$ph_action.json")" \
+      "a $ph_action request with no trailer still reaches Project Home"
+    got=$(ph_received)
+    assert_eq "-" "$(printf '%s' "$got" | cut -d' ' -f2)" \
+      "with no trailer, the $ph_action request carries no Estate-Task header at all"
+    assert_eq "$ph_want" "$(printf '%s' "$got" | cut -d' ' -f3-)" \
+      "the untrailered $ph_action body is the same CI body — a missing id, not an empty one"
+    assert_eq "$ph_un_traceparent" "$(printf '%s' "$got" | cut -d' ' -f1)" \
+      "the untrailered $ph_action still sends its own traceparent — the header is optional, not the trace"
+  done
+
+  ph_body notice >"$tmp/ph-notice.json"
+  assert_eq "200" "$(ph_send "$tmp/ctx-git.env" notice "$tmp/ph-notice.json")" \
+    "a notice still reaches Project Home on a mission's HEAD commit"
+  got=$(ph_received)
+  assert_eq "-" "$(printf '%s' "$got" | cut -d' ' -f2)" \
+    "a notice carries no Estate-Task header: it belongs to no task"
+  assert_eq "body category key link title" "$(printf '%s' "$got" | cut -d' ' -f3-)" \
+    "the notice body is the notice body, with no task identity in it"
+  assert_eq "self-smoke" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["key"])' "$tmp/ph-notice.json")" \
+    "the notice body is otherwise unchanged by the header going out on the other three"
+
+  # traceparent and Estate-Task are two different things and both are wanted:
+  # one is where this hop sits in the trace, the other is which mission task it
+  # is working on. Neither is derived from the other, and neither replaces it.
+  got=$(ph_send "$tmp/ctx-git.env" claim "$tmp/ph-claim.json" >/dev/null; ph_received)
+  assert_eq "${ph_traceparent} m9/T7" "$(printf '%s' "$got" | cut -d' ' -f1-2)" \
+    "traceparent and Estate-Task both go out, each unchanged by the other"
+
+  # The whole request as it goes on the wire: the ids in the header, and a body
+  # that is still the body CI knows.
+  printf '\n--- one real Project Home request this self-test captured ---\n'
+  printf 'POST /api/ci/tasks/42/claim\n'
+  printf 'traceparent: %s\n' "$ph_traceparent"
+  printf 'Estate-Task: %s\n' "$(ph_header "$tmp/ctx-git.env")"
+  printf '\n'
   cat "$tmp/ph-claim.json"
   printf '\n'
-  printf -- '--- end body ---\n\n'
+  printf -- '--- end request ---\n\n'
+
+  # --- 8b. the reporter step does the same thing, and nothing more. A workflow
+  # file is otherwise unproven until a runner on the far side of the LAN runs it.
+  local wf2 step_body req_body hdr_line guard_line2 curl_line body_line
+  wf2="$(cd -- "$(dirname -- "$SELF")" && pwd)/../.github/workflows/reusable-project-home.yml"
+  step_body=$(sed -n '/- name: Build and send bounded Project Home request/,$p' "$wf2" 2>/dev/null)
+  req_body=$(printf '%s\n' "$step_body" \
+    | sed -n '/python3 - <<.PY. > "\$RUNNER_TEMP\/project-home-request.json"/,/^ *PY$/p')
+  hdr_line=$(printf '%s\n' "$step_body" | grep -n 'header = "Estate-Task' | head -n1 | cut -d: -f1)
+  guard_line2=$(printf '%s\n' "$step_body" | grep -n 'if \[ -n "\$ph_estate_task" \]' | head -n1 | cut -d: -f1)
+  curl_line=$(printf '%s\n' "$step_body" | grep -n '| curl --config -' | head -n1 | cut -d: -f1)
+  if [ -n "$hdr_line" ] && [ -n "$guard_line2" ] && [ -n "$curl_line" ] \
+    && [ "$guard_line2" -lt "$hdr_line" ] && [ "$hdr_line" -lt "$curl_line" ] \
+    && printf '%s' "$step_body" | grep -q 'project-home-header --env-file'; then
+    ok "the reporter step derives Estate-Task from the helper and sends it as a request header, off argv"
+  else
+    nope "the reporter step derives Estate-Task from the helper and sends it as a request header, off argv" \
+      "helper [$(printf '%s' "$step_body" | grep -c 'project-home-header')] guard [$guard_line2] header [$hdr_line] curl [$curl_line]"
+  fi
+  body_line=$(printf '%s\n' "$req_body" | grep -n 'mission' | head -n1 | cut -d: -f1)
+  if [ -n "$req_body" ] && [ -z "$body_line" ]; then
+    ok "the reporter step's request body builder mentions no mission id — one interface, not two"
+  else
+    nope "the reporter step's request body builder mentions no mission id — one interface, not two" \
+      "body block [$req_body] mission line [$body_line]"
+  fi
+  # A notice is a task-less call even on a mission's HEAD: the header is computed
+  # for the three task calls only, which is the decision this greps for.
+  notice_line=$(printf '%s\n' "$step_body" | grep -n '\[ "\$PH_ACTION" != "notice" \]' | head -n1 | cut -d: -f1)
+  helper_call=$(printf '%s\n' "$step_body" | grep -n 'project-home-header --env-file' | head -n1 | cut -d: -f1)
+  if [ -n "$notice_line" ] && [ -n "$helper_call" ] && [ "$notice_line" -lt "$helper_call" ]; then
+    ok "the reporter step withholds Estate-Task from a notice, which belongs to no task"
+  else
+    nope "the reporter step withholds Estate-Task from a notice, which belongs to no task" \
+      "notice guard [$notice_line] helper call [$helper_call]"
+  fi
+
+  # traceparent is a different thing from Estate-Task, and both are wanted: the
+  # first says where this hop sits in the trace, the second which mission task it
+  # is working on. Adding the second must never have cost the first.
+  tp_line=$(printf '%s\n' "$step_body" | grep -n 'header = "traceparent' | head -n1 | cut -d: -f1)
+  if [ -n "$tp_line" ] && [ "$tp_line" -lt "$curl_line" ] && printf '%s' "$step_body" | grep -q 'header = "Authorization: Bearer'; then
+    ok "the reporter step still sends the traceparent, and still off argv, beside the Estate-Task ids"
+  else
+    nope "the reporter step still sends the traceparent, and still off argv, beside the Estate-Task ids" \
+      "traceparent line [$tp_line] curl [$curl_line]"
+  fi
 
   # --- 9. a GitHub-hosted runner never emits a span that cannot arrive (§1)
   : >"$RX_DIR/bodies.jsonl"
