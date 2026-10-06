@@ -41,12 +41,51 @@ Available templates:
 | `reusable-contract-freshness.yml` | shallow-clone the Play-Nice contract source over https, run `contractctl freshness --manifest <caller manifest> --json`; exit 0 only on CURRENT (fail closed) |
 | `reusable-uat.yml` | pinned checkout + setup-node (npm cache, conditional `npm ci`) + a caller-supplied real-browser UAT command under a `UAT_READONLY=1` read-only posture with optional `uat-token` passthrough; UAT output uploaded as an artifact (14-day retention) |
 | `reusable-secret-scan.yml` | pinned checkout + pinned gitleaks-action secret scan; a repo-local `.gitleaks.toml` allowlists documented false positives instead of suppressing at the harness level. `fetch-depth` defaults to 1 (fast PR check); use 0 for a full-history scan |
-| `reusable-project-home.yml` | narrow Project Home CI reporter: exact task claim/heartbeat/finish plus deduplicated BOOP notice; callers pass the private base URL and a dedicated `ci`-scope token only as secrets |
+| `reusable-project-home.yml` | narrow Project Home CI reporter: exact task claim/heartbeat/finish plus deduplicated BOOP notice, each call carrying W3C trace context; callers pass the private base URL and a dedicated `ci`-scope token only as secrets |
 
 How this repo proves itself (static checks alone prove nothing for
 `workflow_call`): `actionlint-selfcheck.yml` lints every workflow here with
 a checksum-pinned actionlint, and `self-smoke.yml` **really executes** each
 template against the fixtures under `fixtures/` on every push/PR.
+
+## Telemetry
+
+Every template emits one OpenTelemetry pipeline span and one job span per job,
+following the estate telemetry contract: OTLP over HTTP as JSON, W3C trace
+context, and the standard CI/CD and VCS semantic conventions (`cicd.*`, `vcs.*`)
+with estate attributes only where no standard name carries the meaning
+(`estate.host.class`, `estate.actor.kind`, `estate.mission.id`, `estate.task.id`).
+
+It is a **side effect and nothing else**:
+
+- Off by default. Telemetry runs only when the caller sets
+  `vars.OTEL_EXPORTER_OTLP_ENDPOINT`; unset, every telemetry step is skipped and
+  the workflow behaves exactly as it does today.
+- A GitHub-hosted runner cannot reach the LAN Collector, so it logs
+  `skipped: GitHub-hosted runner cannot reach the LAN Collector` and carries on.
+- Every telemetry step is `continue-on-error`, and the closing step runs with
+  `if: always()` so a failed job still reports what it was doing. A span can
+  never turn a pipeline red or green.
+- Nothing private leaves: no secrets, tokens, runner names, host names, IPs,
+  file contents or paths. `estate.host.class` is a declared class
+  (`dev-vm`, `bazzite`, `dockerhost`, `stack-vm`, `github-hosted`, `unknown`),
+  not a hostname — declare it with the `host-class` input or `ESTATE_HOST_CLASS`.
+
+A pull request a mission lands carries an `Estate-Task: <mission_id>/<task_id>`
+commit trailer; the reporter reads it and joins the mission task's trace, which
+any producer can compute from the same ids (see `scripts/otel-span.sh`). A
+pull request without one gets its own trace, correlated by `vcs.change.id` —
+expected, not an error. The Project Home reporter attaches the resolved
+`traceparent` to claim, heartbeat, finish and notice; a caller that already has
+context passes it through the `traceparent` input.
+
+The emitter is `scripts/otel-span.sh` — bash, curl and sha256sum, no new action
+dependency and nothing to install. Its own self-test is the proof that needs no
+GitHub:
+
+```sh
+bash -n scripts/otel-span.sh && bash scripts/otel-span.sh --self-test
+```
 
 Callers reference templates by `@main` for adoption simplicity; repos that
 want stronger immutability may pin a ci-harness commit SHA in the `uses:`

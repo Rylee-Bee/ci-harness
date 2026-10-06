@@ -1,0 +1,99 @@
+name: otel-span
+description: >-
+  Emit one OpenTelemetry pipeline span and one job span for a CI job, through
+  scripts/otel-span.sh. This is a wrapper, not a dependency: every line of
+  behaviour lives in the script, so the workflows stay readable and the
+  emitter stays testable on its own (`bash scripts/otel-span.sh --self-test`).
+  Telemetry is a side effect — unset the endpoint and this step is skipped.
+
+inputs:
+  command:
+    description: "ci-open to begin a job span, ci-close to send it."
+    required: true
+  span-name:
+    description: >-
+      The job's name, reported as cicd.pipeline.task.name. An enum-like label,
+      never free text.
+    required: false
+    default: ""
+  result:
+    description: "The job's real outcome (success, failure, cancelled) for ci-close."
+    required: false
+    default: ""
+  traceparent:
+    description: >-
+      Inbound trace context, when a caller already has one. Empty means the
+      script resolves it from the `Estate-Task` commit trailer instead.
+    required: false
+    default: ""
+  host-class:
+    description: >-
+      estate.host.class for a self-hosted runner: dev-vm, bazzite, dockerhost,
+      stack-vm or unknown. A runner never reports its own name — that is the
+      private topology the contract forbids.
+    required: false
+    default: ""
+  change-id:
+    description: "Pull request number, reported as vcs.change.id."
+    required: false
+    default: ""
+
+outputs:
+  traceparent:
+    description: >-
+      The trace context this run would use, for attaching to an outbound HTTP
+      call. Empty when telemetry is off.
+
+runs:
+  using: composite
+  steps:
+    - name: Emit OpenTelemetry span
+      shell: bash
+      env:
+        OTEL_ACTION_DIR: ${{ github.action_path }}
+        OTEL_COMMAND: ${{ inputs.command }}
+        OTEL_SPAN_NAME: ${{ inputs.span-name }}
+        OTEL_SPAN_RESULT: ${{ inputs.result }}
+        OTEL_TRACEPARENT: ${{ inputs.traceparent }}
+        OTEL_VCS_CHANGE_ID: ${{ inputs.change-id }}
+        ESTATE_HOST_CLASS: ${{ inputs.host-class }}
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+        OTEL_SERVICE_NAME: ci-harness
+        OTEL_REPO_ROOT: ${{ github.workspace }}
+      run: |
+        set -uo pipefail
+        # The runner checks actions out at a depth this file does not control
+        # (_actions/<owner>/<repo>/<path>/<ref>), so the emitter is found by
+        # walking up to the checkout root rather than by a fixed .. count.
+        script_dir=$OTEL_ACTION_DIR
+        for _ in 1 2 3 4 5 6 7 8; do
+          if [ -f "$script_dir/scripts/otel-span.sh" ]; then
+            break
+          fi
+          script_dir=$(dirname "$script_dir")
+        done
+        OTEL_SCRIPT="$script_dir/scripts/otel-span.sh"
+        if [ ! -f "$OTEL_SCRIPT" ]; then
+          echo "otel-span: emitter not found; telemetry is off for this step"
+          exit 0
+        fi
+        case "$OTEL_COMMAND" in
+          ci-open)
+            bash "$OTEL_SCRIPT" ci-open --span-name "$OTEL_SPAN_NAME" --change-id "$OTEL_VCS_CHANGE_ID" || true
+            ;;
+          ci-close)
+            bash "$OTEL_SCRIPT" ci-close --span-name "$OTEL_SPAN_NAME" --result "$OTEL_SPAN_RESULT" || true
+            ;;
+          *)
+            echo "otel-span: unknown command '$OTEL_COMMAND'"
+            exit 0
+            ;;
+        esac
+        # Resolved once, so a caller can attach the same context to an HTTP call
+        # it makes in a later step of the same job. Empty means telemetry is off
+        # and the caller attaches no header at all.
+        traceparent=$(bash "$OTEL_SCRIPT" traceparent 2>/dev/null) || traceparent=""
+        if [ -n "$traceparent" ]; then
+          printf 'traceparent=%s\n' "$traceparent" >> "$GITHUB_OUTPUT"
+        fi
+        exit 0

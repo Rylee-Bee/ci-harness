@@ -115,6 +115,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Telemetry is a side effect, never a gate: skipped entirely unless the
+      # caller sets vars.OTEL_EXPORTER_OTLP_ENDPOINT, and unable to fail the job.
+      - name: Telemetry - open job span
+        if: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-open
+          span-name: node build
+          change-id: ${{ github.event.pull_request.number }}
       - name: Set up Python (polyglot e2e)
         if: ${{ inputs.setup-python }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -146,3 +156,13 @@ jobs:
         with:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.working-directory }}/${{ inputs.dist-path }}
+      - name: Telemetry - close job span
+        # always(): a job that failed still reports what it was doing, and the
+        # result below is the job's real outcome.
+        if: ${{ always() && vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-close
+          span-name: node build
+          result: ${{ job.status }}

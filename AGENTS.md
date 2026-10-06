@@ -21,6 +21,8 @@ Estate rules: `~/.agents/AGENTS.md` and `play-nice-contracts/contracts/everyone/
 | `.github/workflows/actionlint-selfcheck.yml` | source | static lint of all workflows with checksum-pinned actionlint | rarely |
 | `.github/workflows/secret-scan-selfcheck.yml` | source | runs `reusable-secret-scan.yml` on this repo (full history) | rarely |
 | `pins/ACTIONS.md` | docs/contract | every pinned action SHA, binary sha256, toolchain default, and the bump protocol | yes, before touching any `uses:` SHA or version default |
+| `scripts/otel-span.sh` | source | the OpenTelemetry span emitter every template calls (bash + curl + sha256sum, self-testing); telemetry is a side effect that can never change a job outcome | yes, when changing what CI reports |
+| `.github/actions/otel-span/action.yml` | source | a wrapper that runs the script from a workflow step; every behaviour lives in the script, so nothing here is a dependency | rarely |
 | `README.md` | docs | adoption guide, template table, permissions + visibility rules, freshness semantics | yes; keep in sync with template inputs |
 | `fixtures/*-demo/` | fixtures | minimal projects self-smoke drives (py, node, container, uat, contract) | when the matching template changes |
 | `fixtures/contract-demo/current-adoption.yaml` | fixture | CURRENT pin; moved by the Play-Nice pin robot (`chore(play-nice): pin …` PRs) | don't hand-edit |

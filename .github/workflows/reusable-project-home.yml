@@ -77,6 +77,16 @@ on:
         type: boolean
         required: false
         default: false
+      traceparent:
+        description: >-
+          Optional inbound W3C trace context for the call this job makes
+          (`00-<trace id>-<span id>-<flags>`). Empty (the default) means the
+          reporter derives the context itself — from the `Estate-Task` commit
+          trailer when the caller checked out, otherwise from the run id — and
+          attaches nothing when telemetry is off.
+        type: string
+        required: false
+        default: ""
     secrets:
       project-home-url:
         description: Project Home base URL. Required unless internal self-smoke is true.
@@ -93,6 +103,21 @@ jobs:
     name: Project Home ${{ inputs.action }}
     runs-on: ${{ inputs.runs-on }}
     steps:
+      # Telemetry is a side effect, never a gate: skipped entirely unless the
+      # caller sets vars.OTEL_EXPORTER_OTLP_ENDPOINT, and unable to fail the job.
+      # All four actions (claim, heartbeat, finish, notice) happen in the one
+      # step below, so the trace context is resolved once here and attached to
+      # whichever call this run makes — not four extra steps.
+      - name: Telemetry - open job span
+        id: otel
+        if: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-open
+          span-name: Project Home ${{ inputs.action }}
+          traceparent: ${{ inputs.traceparent }}
+          change-id: ${{ github.event.pull_request.number }}
       - name: Build and send bounded Project Home request
         shell: bash
         env:
@@ -108,6 +133,8 @@ jobs:
           PH_NOTICE_BODY: ${{ inputs.notice-body }}
           PH_NOTICE_LINK: ${{ inputs.notice-link }}
           PH_SELF_SMOKE: ${{ inputs.self-smoke && '1' || '0' }}
+          PH_TRACEPARENT_INPUT: ${{ inputs.traceparent }}
+          PH_TRACEPARENT: ${{ steps.otel.outputs.traceparent }}
           PH_URL: ${{ secrets.project-home-url }}
           PH_TOKEN: ${{ secrets.project-home-token }}
         run: |
@@ -159,6 +186,15 @@ jobs:
             fi
           fi
 
+          # W3C trace context is the only propagation format the estate accepts.
+          # A malformed one is a caller bug, not a telemetry failure, so it is
+          # refused here rather than quietly forwarded.
+          if [ -n "$PH_TRACEPARENT_INPUT" ] &&
+            ! [[ "$PH_TRACEPARENT_INPUT" =~ ^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$ ]]; then
+            echo "::error::traceparent must be a W3C traceparent header value"
+            exit 2
+          fi
+
           export PH_ACTOR="$actor"
           export PH_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
@@ -198,12 +234,19 @@ jobs:
             python3 - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
 
           payload = json.loads(Path(os.environ["RUNNER_TEMP"], "project-home-request.json").read_text())
           if os.environ["PH_ACTION"] == "notice":
               assert payload["key"] == os.environ["PH_NOTICE_KEY"]
               assert payload["title"] == os.environ["PH_NOTICE_TITLE"]
+          # The traceparent input is the propagation contract with Project
+          # Home: it was accepted above, so it is the value the request carries.
+          traceparent = os.environ.get("PH_TRACEPARENT_INPUT", "")
+          if traceparent:
+              assert re.fullmatch(r"00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}", traceparent), traceparent
+              print("self-smoke: traceparent accepted and would be attached to the request")
           print("Project Home reporter self-smoke: request construction OK")
           PY
             exit 0
@@ -223,10 +266,20 @@ jobs:
           esac
 
           response="$RUNNER_TEMP/project-home-response.json"
+          # W3C trace context rides the same request, so Project Home joins the
+          # mission task's trace instead of starting one of its own. It is not
+          # a secret; it travels into curl's config on stdin with the token, so
+          # neither lands in another process's command line.
+          if [ -n "$PH_TRACEPARENT" ]; then
+            curl_config=$(printf 'header = "Authorization: Bearer %s"\nheader = "traceparent: %s"\n' \
+              "$PH_TOKEN" "$PH_TRACEPARENT")
+          else
+            curl_config=$(printf 'header = "Authorization: Bearer %s"\n' "$PH_TOKEN")
+          fi
           set +e
           # The token reaches curl on stdin (--config -), never in argv: on a self-hosted runner any
           # process of the same user can read another's command line while it runs.
-          code=$(printf 'header = "Authorization: Bearer %s"\n' "$PH_TOKEN" | curl --config - \
+          code=$(printf '%s\n' "$curl_config" | curl --config - \
             --silent --show-error \
             --output "$response" \
             --write-out '%{http_code}' \
@@ -248,3 +301,14 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Telemetry - close job span
+        # always(): a call Project Home rejected still reports what it was
+        # doing, and the result below is the job's real outcome.
+        if: ${{ always() && vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-close
+          span-name: Project Home ${{ inputs.action }}
+          result: ${{ job.status }}

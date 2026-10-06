@@ -175,6 +175,21 @@ run_trace() {
   random_hex32
 }
 
+# Deterministic span ids — one per run for the pipeline span, one per
+# (run, job) for the job span. A span that is emitted twice therefore collapses
+# on its id in a backend instead of appearing as two spans.
+pipeline_span_id() {
+  local digest
+  digest=$(sha256_hex "ci-pipeline|${GITHUB_RUN_ID:-}|${GITHUB_JOB:-unknown}") || return 1
+  nonzero_id "${digest:0:16}"
+}
+
+job_span_id() {
+  local digest
+  digest=$(sha256_hex "ci-job|${GITHUB_RUN_ID:-}|${GITHUB_JOB:-unknown}") || return 1
+  nonzero_id "${digest:0:16}"
+}
+
 # `Estate-Task: <mission_id>/<task_id>` on the head commit is what carries a
 # mission task into CI. Anything that does not match the shape exactly is
 # ignored — a trailer is attacker-influenced text on a pull request.
@@ -271,12 +286,10 @@ cmd_ci_open() {
 
   preflight || return 0
 
-  local run_id=${GITHUB_RUN_ID:-}
-  local job_key=${GITHUB_JOB:-unknown}
-  local trace_id="" parent_span_id="" pipeline_span_id="" job_span_id=""
+  local trace_id="" parent_span_id="" pipeline_id="" job_id=""
   local mission_id="" task_id=""
   local inbound=${OTEL_TRACEPARENT:-${TRACEPARENT:-}}
-  local digest ids task
+  local ids task
 
   if [ -n "$inbound" ] && valid_traceparent "$inbound"; then
     trace_id=$(printf '%s' "$inbound" | cut -d- -f2)
@@ -303,12 +316,13 @@ cmd_ci_open() {
   fi
 
   # Deterministic span ids, so a repeated emit of the same span collapses in a
-  # backend instead of showing up as duplicates: one id per run for the
-  # pipeline span, one per (run, job) for the job span.
-  digest=$(sha256_hex "ci-pipeline|${run_id}|${job_key}") || digest=""
-  pipeline_span_id=$(nonzero_id "${digest:0:16}")
-  digest=$(sha256_hex "ci-job|${run_id}|${job_key}") || digest=""
-  job_span_id=$(nonzero_id "${digest:0:16}")
+  # backend instead of showing up as duplicates.
+  pipeline_id=$(pipeline_span_id) || pipeline_id=""
+  job_id=$(job_span_id) || job_id=""
+  if [ -z "$pipeline_id" ] || [ -z "$job_id" ]; then
+    log "cannot derive span ids; telemetry is off for this step"
+    return 0
+  fi
 
   local dir
   dir=$(state_dir)
@@ -320,8 +334,8 @@ cmd_ci_open() {
   {
     printf 'trace_id=%s\n' "$trace_id"
     printf 'parent_span_id=%s\n' "$parent_span_id"
-    printf 'pipeline_span_id=%s\n' "$pipeline_span_id"
-    printf 'job_span_id=%s\n' "$job_span_id"
+    printf 'pipeline_span_id=%s\n' "$pipeline_id"
+    printf 'job_span_id=%s\n' "$job_id"
     printf 'start_ns=%s\n' "$(now_ns)"
     printf 'span_name=%s\n' "$span_name"
     printf 'change_id=%s\n' "$change_id"
@@ -527,8 +541,13 @@ cmd_traceparent() {
   else
     local recorded
     if recorded=$(state_get trace_id) && [ -n "$recorded" ]; then
+      # Whatever ci-open decided, so a header this job attaches lands in the
+      # same trace as the spans this job emits.
       trace_id=$recorded
       parent_span_id=$(state_get parent_span_id) || parent_span_id=""
+      if [ -z "$parent_span_id" ]; then
+        parent_span_id=$(state_get pipeline_span_id) || parent_span_id=""
+      fi
     else
       task=$(read_estate_task "${OTEL_REPO_ROOT:-${GITHUB_WORKSPACE:-}}")
       if [ -n "$task" ]; then
@@ -539,8 +558,10 @@ cmd_traceparent() {
         fi
       fi
       if [ -z "$trace_id" ]; then
+        # No mission context: this run is its own trace, and the pipeline span
+        # is its root, so that is the span a downstream call hangs off.
         trace_id=$(run_trace) || return 0
-        parent_span_id=""
+        parent_span_id=$(pipeline_span_id) || parent_span_id=""
       fi
     fi
   fi

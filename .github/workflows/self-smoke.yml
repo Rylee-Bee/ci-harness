@@ -39,6 +39,37 @@ jobs:
       notice-body: "request construction only"
       self-smoke: true
 
+  # The reporter's new `traceparent` input, exercised through the real uses:
+  # contract. The template refuses a malformed context, so this job is a
+  # positive assertion that a valid one is accepted and would be attached to the
+  # claim/heartbeat/finish/notice request. The value is the contract §2 recipe
+  # for a fixture mission, so it can be recomputed with
+  # `bash scripts/otel-span.sh task-trace self-smoke telemetry`.
+  project-home-traceparent:
+    name: Project Home reporter contract (trace context)
+    uses: ./.github/workflows/reusable-project-home.yml
+    with:
+      action: finish
+      task-id: "1"
+      outcome: succeeded
+      traceparent: "00-9c95f244499c6c1558ca33bfb966f325-27043bacb84f4666-01"
+      self-smoke: true
+
+  # The span emitter itself: the same two commands the workflows run, proved
+  # here without GitHub — a loopback OTLP receiver, an unset endpoint, and an
+  # unreachable Collector. Static lint cannot prove any of that.
+  otel-span:
+    name: OpenTelemetry span emitter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Emitter self-test
+        run: |
+          bash -n scripts/otel-span.sh
+          bash scripts/otel-span.sh --self-test
+
   python:
     name: python template
     uses: ./.github/workflows/reusable-python.yml

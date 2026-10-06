@@ -99,6 +99,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Telemetry is a side effect, never a gate. Both steps are skipped unless
+      # the caller sets vars.OTEL_EXPORTER_OTLP_ENDPOINT, and neither can fail
+      # the job: OTLP failure must not fail CI.
+      - name: Telemetry - open job span
+        if: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-open
+          span-name: python tests
+          change-id: ${{ github.event.pull_request.number }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ inputs.python-version }}
@@ -113,6 +124,16 @@ jobs:
         run: |
           set -euo pipefail
           ${{ inputs.post-test-commands }}
+      - name: Telemetry - close job span
+        # always(): a job that failed still reports what it was doing, and the
+        # result below is the job's real outcome, not a telemetry guess.
+        if: ${{ always() && vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-close
+          span-name: python tests
+          result: ${{ job.status }}
 
   ruff:
     name: ruff
@@ -125,6 +146,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Telemetry - open job span
+        if: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-open
+          span-name: ruff
+          change-id: ${{ github.event.pull_request.number }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ inputs.python-version }}
@@ -134,6 +163,14 @@ jobs:
         run: uv sync --frozen ${{ inputs.sync-args }}
       - name: Run ruff
         run: uv run ruff ${{ inputs.ruff-args }}
+      - name: Telemetry - close job span
+        if: ${{ always() && vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-close
+          span-name: ruff
+          result: ${{ job.status }}
 
   bandit:
     name: bandit
@@ -146,6 +183,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Telemetry - open job span
+        if: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-open
+          span-name: bandit
+          change-id: ${{ github.event.pull_request.number }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ inputs.python-version }}
@@ -155,3 +200,11 @@ jobs:
         run: uv sync --frozen ${{ inputs.sync-args }}
       - name: Run bandit
         run: uv run bandit ${{ inputs.bandit-args }}
+      - name: Telemetry - close job span
+        if: ${{ always() && vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-close
+          span-name: bandit
+          result: ${{ job.status }}

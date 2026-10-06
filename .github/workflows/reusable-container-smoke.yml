@@ -76,6 +76,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # Telemetry is a side effect, never a gate: skipped entirely unless the
+      # caller sets vars.OTEL_EXPORTER_OTLP_ENDPOINT, and unable to fail the job.
+      - name: Telemetry - open job span
+        if: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-open
+          span-name: container smoke
+          change-id: ${{ github.event.pull_request.number }}
+
       - name: docker build
         env:
           IMAGE: ${{ inputs.image-name }}
@@ -129,3 +140,14 @@ jobs:
       - name: Dump container logs on failure
         if: ${{ failure() && inputs.healthz-url != '' }}
         run: docker logs ci-harness-smoke || true
+
+      - name: Telemetry - close job span
+        # always(): a job that failed still reports what it was doing, and the
+        # result below is the job's real outcome.
+        if: ${{ always() && vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-close
+          span-name: container smoke
+          result: ${{ job.status }}

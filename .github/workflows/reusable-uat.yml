@@ -117,6 +117,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Telemetry is a side effect, never a gate: skipped entirely unless the
+      # caller sets vars.OTEL_EXPORTER_OTLP_ENDPOINT, and unable to fail the job.
+      - name: Telemetry - open job span
+        if: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-open
+          span-name: agent-driven uat
+          change-id: ${{ github.event.pull_request.number }}
       # setup-node v7 THROWS "Some specified paths were not resolved, unable
       # to cache dependencies." when `cache:` is set and no lockfile
       # resolves — so caching is gated on lockfile presence, the same gate
@@ -177,3 +187,13 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.working-directory }}/${{ inputs.uat-output-dir }}
           retention-days: 14
+      - name: Telemetry - close job span
+        # always(): a job that failed still reports what it was doing, and the
+        # result below is the job's real outcome.
+        if: ${{ always() && vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-close
+          span-name: agent-driven uat
+          result: ${{ job.status }}

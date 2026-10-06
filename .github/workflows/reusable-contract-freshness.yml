@@ -87,6 +87,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Telemetry is a side effect, never a gate: skipped entirely unless the
+      # caller sets vars.OTEL_EXPORTER_OTLP_ENDPOINT, and unable to fail the job.
+      # In particular it reports the drift verdict; it never decides one.
+      - name: Telemetry - open job span
+        if: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-open
+          span-name: contract freshness
+          change-id: ${{ github.event.pull_request.number }}
       - name: Shallow-clone contract source (https, no credentials)
         run: >-
           git clone --depth 1
@@ -139,3 +150,13 @@ jobs:
               exit 2
               ;;
           esac
+      - name: Telemetry - close job span
+        # always(): a gate that went red still reports what it was doing, and
+        # the result below is the job's real outcome — never a telemetry guess.
+        if: ${{ always() && vars.OTEL_EXPORTER_OTLP_ENDPOINT != '' }}
+        continue-on-error: true
+        uses: Rylee-Bee/ci-harness/.github/actions/otel-span@main
+        with:
+          command: ci-close
+          span-name: contract freshness
+          result: ${{ job.status }}
