@@ -18,6 +18,7 @@ Estate rules: `~/.agents/AGENTS.md` and `play-nice-contracts/contracts/everyone/
 |---|---|---|---|
 | `.github/workflows/reusable-*.yml` | source | the seven templates consumers call via `uses:` (python, node, container-smoke, contract-freshness, uat, secret-scan, project-home) | yes, when changing a template |
 | `.github/workflows/self-smoke.yml` | source | **real execution** of every template against `fixtures/` | yes, with any template change |
+| `scripts/otel-span.sh` | source | the estate's OTLP/HTTP span emitter (bash + curl, standard library only); every template emits a pipeline span and a job span through it. `--self-test` stands a throwaway receiver up and proves the bodies — CI cannot otherwise prove a byte offline | yes, when changing what CI emits |
 | `.github/workflows/actionlint-selfcheck.yml` | source | static lint of all workflows with checksum-pinned actionlint | rarely |
 | `.github/workflows/secret-scan-selfcheck.yml` | source | runs `reusable-secret-scan.yml` on this repo (full history) | rarely |
 | `pins/ACTIONS.md` | docs/contract | every pinned action SHA, binary sha256, toolchain default, and the bump protocol | yes, before touching any `uses:` SHA or version default |
@@ -32,10 +33,14 @@ Lockfiles (`fixtures/*/uv.lock`, `package-lock.json`) are committed on purpose s
 ## Commands
 
 There is no local build, test runner, or lint wrapper, and `actionlint` is not installed on
-the workstation. **CI is the gate**, on every push to `main` and every PR:
+the workstation. The span helper is the one thing with a runnable local proof:
+
+- `bash scripts/otel-span.sh --self-test`
+
+**CI is the gate**, on every push to `main` and every PR:
 
 - `actionlint-selfcheck` — `./actionlint -color` over `.github/workflows/*.yml`
-- `self-smoke` — calls each template through its real `uses:` contract
+- `self-smoke` — calls each template through its real `uses:` contract, plus the two telemetry jobs
 - `secret-scan-selfcheck` — gitleaks over full history
 
 Optional local sanity for a fixture (same invocations the templates run):
