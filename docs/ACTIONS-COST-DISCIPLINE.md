@@ -50,3 +50,11 @@ Cost reduction is **not** permission to remove a meaningful gate. If two checks 
 The first estate pass targeted duplicate PR + post-merge validation in private repositories, while preserving PR gates, manual dispatch, existing concurrency cancellation, and release/deploy workflows. Homelab already contained several of these optimizations and should be treated as prior art.
 
 Follow-up work should measure actual Actions usage after the trigger changes land before introducing self-hosted runners or weakening checks.
+
+## 2026-10-06 ratification — superseded for this estate
+
+The line above was written on 2026-10-05. Twenty self-hosted runners had already been registered and running by then, so it read as though the decision were still ahead when it had in fact already been made.
+
+**The estate owner ratified the self-hosted runner fleet on 2026-10-06.** For this estate that call is made and the guidance above is superseded. The reasoning and the measured state live in `agent-platform/docs/LOCAL-CI.md`; the short version is that the fleet runs CI, does not deploy, and is now watched by a 15-minute timer because a stopped-not-disabled fleet produced a nine-day silent outage (jobs routed at an offline label stay `queued` forever, which is indistinguishable from running).
+
+The general principle is unchanged and still applies to any *new* runner adoption: measure actual Actions usage first, and do not weaken a meaningful gate to save minutes. Nothing about the ratification weakens isolation or makes the workstation a deployment authority.
