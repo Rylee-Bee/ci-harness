@@ -19,6 +19,12 @@ upstream tag on the pin date (never copied blindly from an older workflow).
 | [actions/upload-artifact](https://github.com/actions/upload-artifact) | v7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | reusable-node, reusable-uat | `git ls-remote` 2026-09-21 |
 | [gitleaks/gitleaks-action](https://github.com/gitleaks/gitleaks-action) | v3.0.0 | `e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e` | reusable-secret-scan | `git ls-remote --tags` 2026-09-28 |
 
+`Rylee-Bee/ci-harness/.github/actions/otel-span@main`, referenced by every
+template, is **this repository's own** code, not a third-party dependency: the
+composite action holds no `uses:` and delegates to `scripts/otel-span.sh`, which
+needs only bash, curl and sha256sum. It follows the same `@main` rule consumers
+already use for the templates themselves.
+
 ## Pinned binaries
 
 | Binary | Version | sha256 | Used in | Verified |
