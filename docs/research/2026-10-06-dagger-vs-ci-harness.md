@@ -13,7 +13,7 @@ commit this study read; every repo-relative path below is as of that commit.
 Dagger's Python SDK does compress the duplicated checkout/setup-python/uv-sync
 block inside `reusable-python.yml` from three copies to one function, so the
 "technology works" bar is met. But the compression is roughly four lines: the
-YAML's job bodies are 67 lines against 74 lines of input declarations, and the
+YAML's job bodies are 67 lines of a 157-line file, and the
 prototype module is 77 lines, so nothing is actually deleted — the work moves
 into a different file while the input surface stays the same size. The
 remaining GitHub Actions wrapper, action-pinning contract, `permissions` flow
@@ -343,7 +343,7 @@ guessed.
 
 | Dimension | Current (`reusable-python.yml`) | Dagger prototype | Verdict |
 |---|---|---|---|
-| Lines removed from workflow YAML | 67 lines of job bodies (lines 91-157) | 77-line module replaces them | **Net negative.** 10 lines *added*; nothing deleted |
+| Total lines this template would keep maintained | 157 - the whole file: 73 input lines (15-87), 2 permissions, 67 job bodies (91-157), 15 header and trigger | The 73-line input interface and the workflow wrapper survive; the port **adds** 77 lines of module, plus a workspace file and a lockfile | **Strictly more.** Nothing is deleted. Counting only the job bodies made this look like +10; counting everything this template would still need maintained makes the direction unambiguous |
 | Configuration removed | none; inputs are the contract | none; 10 module fields mirror the same inputs | **No change.** Same public interface, new place to maintain it |
 | Duplicated scripts removed | n/a — this repo has no `scripts/` directory and no composite actions | n/a | **Not applicable.** No saving exists to claim |
 | Caching behaviour | Implicit: `actions/setup-python` cache + runner image; no explicit cache | Explicit `with_mounted_cache("/root/.cache/uv", ...)` | **Better in principle**, but a new cache-key concept and a self-hosted cache-lifetime question. UNVERIFIED without a run |
@@ -363,7 +363,7 @@ guessed.
 
 | File | Lines | Deletable by a Dagger port? |
 |---|---|---|
-| `.github/workflows/reusable-python.yml` | 157 | **No.** The 74-line `workflow_call` inputs block is the public interface consumers bind to; `AGENTS.md` lines 54-56 call it a public interface and require Rylee's approval to change. The 67-line jobs block is replaced by 77 lines of Python. Net +10 lines, one file becomes two |
+| `.github/workflows/reusable-python.yml` | 157 | **No.** The 74-line `workflow_call` inputs block is the public interface consumers bind to; `AGENTS.md` lines 54-56 call it a public interface and require Rylee's approval to change. The 67-line jobs block is replaced by 77 lines of Python, and the port adds a workspace file and a lockfile. **Total maintained lines go up**, not down; the +10 figure is job-bodies-only and understates it |
 | `pins/ACTIONS.md` | 48 | **No.** `actions/checkout` and `actions/setup-python` SHAs would still be needed for `self-smoke.yml`, `actionlint-selfcheck.yml` and the four other templates; Dagger adds a pin set rather than removing one |
 | `README.md` template table row for `reusable-python.yml` | 1 line | **No.** Consumers still need an adoption snippet, and it would now need a Dagger prerequisite |
 | `self-smoke.yml` job `python` (lines 42-48) | 7 | **No.** Still the proof that the template contract works; a Dagger port would replace it with a different 7-line job, not delete it |
@@ -562,15 +562,22 @@ External:
 
 ## Recommendation
 
-On the counts: the prototype replaces 67 lines of YAML job bodies with 77
-lines of module, deletes no file, keeps the 74-line `workflow_call` input
-interface intact, and cannot express `runs-on` — the input private repos rely on
+On the counts, counting everything rather than just the job bodies: the file is
+157 lines - 73 of them the `workflow_call` input interface, 2 permissions, 67 job
+bodies, 15 header and trigger. That interface is public (`AGENTS.md` lines
+54-56), so it survives verbatim; the port replaces 67 lines of job bodies with
+77 lines of Python and adds a workspace file and a lockfile, so the total this
+template would keep maintained goes **up**. It also cannot express `runs-on` — the input private repos rely on
 to avoid the Actions minute ceiling. Dagger's documented OTLP export is engine
-cgroup metrics, while the traces it advertises land only in the Dagger TUI and
-Dagger Cloud. Under the rule Rylee set, a technology that adds a service and
+cgroup metrics (`TelemetryConfig` exposes `resourceMetrics` and `engineEvents`),
+and the traces it advertises land in the Dagger TUI and Dagger Cloud - a second
+login this estate would have to operate. Whether pipeline spans can be exported
+to an arbitrary OTLP endpoint is UNVERIFIED (below): this study does not claim
+that tracing is closed off, only that no export path to the estate Collector
+was demonstrated. Under the rule Rylee set, a technology that adds a service and
 removes no meaningful complexity is rejected by default.
 
-REJECT -- Dagger replaces 67 lines of `reusable-python.yml` with 77 lines of module and deletes nothing, while adding an engine, a workspace file, a lockfile and a proprietary trace path.
+REJECT -- porting `reusable-python.yml` to Dagger deletes nothing and raises total maintained lines, since the 73-line input interface and the workflow wrapper survive while 77 lines of module, a workspace file and a lockfile are added; the documented trace surface is the Dagger TUI and Dagger Cloud, and whether pipeline spans can reach an arbitrary OTLP endpoint is UNVERIFIED rather than disproved.
 
 ## Unresolved
 
