@@ -162,7 +162,7 @@ Turning it on is one repository variable, read by every template:
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | base URL of the Collector; `/v1/traces` is appended |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | per-signal override, wins over the base URL |
 | `OTEL_SERVICE_NAME` | defaults to `ci-harness` |
-| `ESTATE_HOST_CLASS` | overrides the label-derived host class |
+| `ESTATE_HOST_CLASS` | refines the label-derived host class — it never overrides a runner label that says `github-hosted`, because one repository-variable edit must not be able to point a hosted runner at a LAN Collector it cannot reach |
 
 These are the **standard** OTEL environment variables, not an estate-specific
 discovery mechanism. There is deliberately **no `workflow_call` input** for the

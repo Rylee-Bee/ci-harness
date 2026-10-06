@@ -180,8 +180,25 @@ jobs:
 
           # Every span emission is guarded and cannot fail this step: GitHub
           # checks remain GitHub checks, and OTLP failure must never fail CI.
+          #
+          # The `github-hosted` guard is the helper's own `ci-emit` guard, in the
+          # same form and reading the same field: a GitHub-hosted runner cannot
+          # reach the LAN Collector, so this step stays quiet and says so in the
+          # step summary rather than spending a two-second dial on a span that
+          # cannot arrive. Missing telemetry is UNKNOWN, not a failure.
           otel() { # $1 role, $2 result; remaining args are forwarded to ci-emit
             [ -s "${OTELSPAN_HELPER:-}" ] || return 0
+            otel_host_class=""
+            if [ -s "${OTELSPAN_ENV_FILE:-}" ]; then
+              otel_host_class=$(sed -n "s/^otel_host_class='\(.*\)'\$/\1/p" "$OTELSPAN_ENV_FILE" || true)
+            fi
+            if [ "${otel_host_class:-unknown}" = "github-hosted" ]; then
+              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                printf '### OpenTelemetry\n\nHost class is `github-hosted`; the LAN Collector is unreachable from this runner, so no span was emitted. Missing telemetry is UNKNOWN, not a failure.\n' >>"$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+              fi
+              echo "otel: host-class github-hosted — Collector unreachable from this runner, span not emitted"
+              return 0
+            fi
             bash "$OTELSPAN_HELPER" ci-emit --env-file "$OTELSPAN_ENV_FILE" \
               --role "$1" --result "$2" "${@:3}" >/dev/null 2>&1 || true
           }

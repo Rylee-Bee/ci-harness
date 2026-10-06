@@ -125,20 +125,31 @@ task_from_git() {
 
 # estate.host.class (contract §3). Coarse by design: a runner *label*, never a
 # hostname. The labels are chosen by this estate, so they can carry the meaning.
+#
+# Precedence, and it runs this way on purpose: **the runner label wins**. The
+# label is what the platform actually put on the machine; ESTATE_HOST_CLASS is a
+# repository variable somebody can edit, and one edit must never be enough to
+# turn a GitHub-hosted runner into a "self-hosted" one that dials a LAN Collector
+# it cannot reach. So a label that is already conclusive — `github-hosted` —
+# ends the argument, and the environment is only consulted to *refine* a label
+# that has not decided the question (an unrecognised label that would otherwise
+# degrade to `unknown`). Somebody will try to reverse this to give a repo finer
+# control; the answer is that the safe direction is the one that sends less.
 detect_host_class() {
-  local label v="${ESTATE_HOST_CLASS:-}"
+  local label v="${ESTATE_HOST_CLASS:-}" from_label=""
+  label=$(lower "${1-}")
+  case "$label" in
+    ubuntu | ubuntu-* | windows | windows-* | macos | macos-*) printf 'github-hosted'; return 0 ;;
+    *bazzite*) from_label="bazzite" ;;
+    *dockerhost*) from_label="dockerhost" ;;
+    *stack*) from_label="stack-vm" ;;
+    *dev*) from_label="dev-vm" ;;
+    *) from_label="unknown" ;;
+  esac
   case "$v" in
     dev-vm | bazzite | dockerhost | stack-vm | github-hosted | unknown) printf '%s' "$v"; return 0 ;;
   esac
-  label=$(lower "${1-}")
-  case "$label" in
-    *bazzite*) printf 'bazzite' ;;
-    *dockerhost*) printf 'dockerhost' ;;
-    *stack*) printf 'stack-vm' ;;
-    *dev*) printf 'dev-vm' ;;
-    ubuntu | ubuntu-* | windows | windows-* | macos | macos-*) printf 'github-hosted' ;;
-    *) printf 'unknown' ;;
-  esac
+  printf '%s' "$from_label"
 }
 
 # --------------------------------------------------------------------------------------- OTLP/HTTP JSON
@@ -999,6 +1010,59 @@ print(r["headers"].get("traceparent", "-"), r["body"].get("mission_id", "-"),
   else
     nope "host-class github-hosted says so in the step summary instead of failing silently"
   fi
+
+  # --- 9b. the reporter workflow's own emitter step carries the same guard, in
+  # the same form, ahead of the call it guards. Checked here because a workflow
+  # file is otherwise unproven until a runner on the far side of the LAN runs it.
+  local wf otel_body otel_start otel_end guard_line call_line helper_line
+  wf="$(cd -- "$(dirname -- "$SELF")" && pwd)/../.github/workflows/reusable-project-home.yml"
+  otel_start=$(grep -n '^ *otel() {' "$wf" 2>/dev/null | head -n1 | cut -d: -f1)
+  otel_end=$(awk -v s="${otel_start:-0}" 'NR>s && /^ *\}$/ {print NR; exit}' "$wf" 2>/dev/null)
+  otel_body=$(sed -n "${otel_start:-0},${otel_end:-0}p" "$wf" 2>/dev/null)
+  guard_line=$(printf '%s\n' "$otel_body" | grep -n 'github-hosted' | head -n1 | cut -d: -f1)
+  call_line=$(printf '%s\n' "$otel_body" | grep -n 'ci-emit --env-file' | head -n1 | cut -d: -f1)
+  if [ -n "$guard_line" ] && [ -n "$call_line" ] && [ "$guard_line" -lt "$call_line" ] \
+    && printf '%s' "$otel_body" | grep -q 'otel_host_class' \
+    && printf '%s' "$otel_body" | grep -q 'GITHUB_STEP_SUMMARY'; then
+    ok "the Project Home reporter step guards on github-hosted — and says so in the step summary — before it emits"
+  else
+    nope "the Project Home reporter step guards on github-hosted — and says so in the step summary — before it emits" \
+      "otel() body [${otel_body}] guard line [$guard_line] ci-emit line [$call_line]"
+  fi
+  # Same wording on both sides, so the two guards cannot drift apart: one of them
+  # explaining something the other would not is how a step starts looking exempt.
+  guard_line=$(grep -m1 "Host class is .github-hosted" "$SELF" | sed "s/^[[:space:]]*printf '//")
+  helper_line=$(grep -m1 "Host class is .github-hosted" "$wf" | sed "s/^[[:space:]]*printf '//")
+  if [ -n "$guard_line" ] && [ "$guard_line" = "$helper_line" ]; then
+    ok "the reporter step's hosted-runner note is the helper's own sentence, verbatim"
+  else
+    nope "the reporter step's hosted-runner note is the helper's own sentence, verbatim" \
+      "helper [$guard_line] workflow [$helper_line]"
+  fi
+
+  # --- 9c. the runner label outranks the environment (§3). A repository variable
+  # is one edit away; the runner label is what the platform put on the machine.
+  : >"$RX_DIR/bodies.jsonl"
+  rm -f "$OTEL_BREAKER_FILE"
+  assert_eq "github-hosted" "$(ESTATE_HOST_CLASS=bazzite bash "$SELF" detect-host-class ubuntu-latest)" \
+    "a hosted runner label outranks ESTATE_HOST_CLASS, whatever the environment claims"
+  OTELSPAN_RUNNER_LABEL="ubuntu-latest" ESTATE_HOST_CLASS="bazzite" OTELSPAN_READ_GIT=0 \
+    bash "$SELF" context --env-file "$tmp/ctx-hosted.env" >/dev/null
+  assert_eq "github-hosted" "$(grep '^otel_host_class=' "$tmp/ctx-hosted.env" | cut -d= -f2- | tr -d "'")" \
+    "the context reports host class github-hosted for a hosted label, not the self-hosted-looking value"
+  OTEL_EXPORTER_OTLP_ENDPOINT="$RX_URL" GITHUB_STEP_SUMMARY="$tmp/summary-hosted.md" \
+    bash "$SELF" ci-emit --env-file "$tmp/ctx-hosted.env" --role job --result success >/dev/null
+  assert_eq "0" "$(body_count)" "a hosted runner cannot be talked into sending: nothing goes on the wire"
+
+  # --- 9d. the same precedence must not silence a runner that can send
+  : >"$RX_DIR/bodies.jsonl"
+  OTELSPAN_RUNNER_LABEL="bazzite" OTELSPAN_READ_GIT=0 \
+    bash "$SELF" context --env-file "$tmp/ctx-self.env" >/dev/null
+  OTEL_EXPORTER_OTLP_ENDPOINT="$RX_URL" \
+    bash "$SELF" ci-emit --env-file "$tmp/ctx-self.env" --role job --result success >/dev/null
+  ESTATE_HOST_CLASS=bazzite OTEL_EXPORTER_OTLP_ENDPOINT="$RX_URL" \
+    bash "$SELF" ci-emit --env-file "$tmp/ctx-self.env" --role job --result success >/dev/null
+  assert_eq "2" "$(body_count)" "a self-hosted label still sends — with ESTATE_HOST_CLASS unset, and with it agreeing"
 
   # --- 10. an unreachable Collector costs one timeout, then nothing, and never fails
   unset OTEL_EXPORTER_OTLP_ENDPOINT
