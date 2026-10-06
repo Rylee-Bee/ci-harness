@@ -516,6 +516,85 @@ cmd_ci_emit() {
   return 0
 }
 
+# --------------------------------------------------------------------------------------- project home request
+
+# The body of the Project Home /api/ci call, built from the same context
+# env-file the trace was derived from — so the two correlation ids on the wire
+# cannot disagree with the ids this run's spans are recorded under.
+#
+# With an Estate-Task trailer both `mission_id` and `mission_task_id` are sent.
+# With none, *neither key is written at all*: a missing id is honest, an empty
+# string or a repo/run-id stand-in would point a backend at a task this run is
+# not working on. §2 is why this matters — a mission runs for days, so no single
+# trace spans it, and the ids are the only thing that joins its spans.
+cmd_project_home_body() {
+  local ctx=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --env-file) ctx="${2-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  # Read the way every template reads this file: the shell, not the parser.
+  # Absent file, absent trailer and unparseable trailer all arrive as empty.
+  local mission="" tid=""
+  if [ -n "$ctx" ] && [ -s "$ctx" ]; then
+    mission=$(sed -n "s/^otel_mission_id='\(.*\)'\$/\1/p" "$ctx" 2>/dev/null || true)
+    tid=$(sed -n "s/^otel_task_id='\(.*\)'\$/\1/p" "$ctx" 2>/dev/null || true)
+  fi
+
+  PH_ESTATE_MISSION="$mission" PH_ESTATE_TASK="$tid" python3 - <<'BODY_PY'
+import json
+import os
+import re
+
+# The same trailer grammar cmd_context accepts, re-checked here: these ids name a
+# mission task, so anything that is not the id itself is dropped rather than
+# forwarded. Half a pair is no pair.
+IDS = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def correlation():
+    mission = os.environ.get("PH_ESTATE_MISSION", "")
+    task = os.environ.get("PH_ESTATE_TASK", "")
+    if not (mission and task and IDS.match(mission) and IDS.match(task)):
+        return {}
+    return {"mission_id": mission, "mission_task_id": task}
+
+
+action = os.environ["PH_ACTION"]
+payload = None
+if action in {"claim", "heartbeat"}:
+    payload = {
+        "actor": os.environ["PH_ACTOR"],
+        "lease_seconds": int(os.environ["PH_LEASE_SECONDS"]),
+    }
+elif action == "finish":
+    payload = {
+        "actor": os.environ["PH_ACTOR"],
+        "outcome": os.environ["PH_OUTCOME"],
+        "note": os.environ["PH_NOTE"],
+        "run_url": os.environ["PH_RUN_URL"],
+    }
+else:
+    # A notice belongs to no task. There is nothing to correlate it to, and a
+    # correlation key with no meaning behind it is worse than none at all.
+    payload = {
+        "key": os.environ["PH_NOTICE_KEY"],
+        "category": os.environ["PH_NOTICE_CATEGORY"],
+        "title": os.environ["PH_NOTICE_TITLE"],
+        "body": os.environ["PH_NOTICE_BODY"],
+        "link": os.environ["PH_NOTICE_LINK"],
+    }
+
+if action != "notice":
+    payload.update(correlation())
+
+print(json.dumps(payload, separators=(",", ":")))
+BODY_PY
+}
+
 # --------------------------------------------------------------------------------------- usage
 
 usage() {
@@ -525,6 +604,11 @@ otel-span.sh — the estate OpenTelemetry span emitter (bash + curl, standard li
   --self-test                     start a throwaway OTLP receiver and prove the bodies
   context   --env-file F [--task <mission>/<task>] [--job-key K]
   ci-emit   --env-file F [--role pipeline|job] [--result S] [--end-ns N] [--attr k=v]...
+  project-home-body [--env-file F]   the Project Home /api/ci request body, on stdout.
+                             Reads PH_ACTION, PH_ACTOR, PH_LEASE_SECONDS, PH_OUTCOME,
+                             PH_NOTE, PH_RUN_URL, PH_NOTICE_{KEY,CATEGORY,TITLE,BODY,LINK}
+                             from the environment, and carries mission_id /
+                             mission_task_id only when F holds them.
   emit      --name N --trace-id H32 --span-id H16 [--parent-span-id H16]
             --start-ns N --end-ns N [--attr k=v]... [--error MSG]
   task-traceparent <mission> <task>
@@ -546,6 +630,7 @@ main() {
     emit) cmd_emit "$@" ;;
     context) cmd_context "$@" ;;
     ci-emit) cmd_ci_emit "$@" ;;
+    project-home-body) cmd_project_home_body "$@" ;;
     task-traceparent)
       [ $# -ge 2 ] || die "task-traceparent needs a mission id and a task id"
       read -r t s <<<"$(task_ids "${1-}" "${2-}")"
@@ -649,6 +734,24 @@ assert_eq() { # want got label
 
 bodies() { cat "$RX_DIR/bodies.jsonl" 2>/dev/null; }
 body_count() { bodies | grep -c . ; }
+
+# One Project Home request body, built exactly as the reporter builds it: the
+# same inputs the template exports, the same helper, the same env-file.
+ph_body() { # $1 action, $2 context env-file
+  env PH_ACTION="$1" \
+    PH_ACTOR="gha:Rylee-Bee/vefr:7" PH_LEASE_SECONDS=900 \
+    PH_OUTCOME="succeeded" PH_NOTE="" \
+    PH_RUN_URL="https://github.com/Rylee-Bee/vefr/actions/runs/7" \
+    PH_NOTICE_KEY="self-smoke" PH_NOTICE_CATEGORY="mission" \
+    PH_NOTICE_TITLE="ci-harness self-smoke" PH_NOTICE_BODY="request construction only" \
+    PH_NOTICE_LINK="" \
+    bash "$SELF" project-home-body --env-file "$2"
+}
+
+# A body's two correlation keys, or one "-" for each key that is absent.
+ph_ids() {
+  python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); print(b.get("mission_id","-"), b.get("mission_task_id","-"))' "$1"
+}
 
 self_test() {
   # A global, not a local: the EXIT trap runs after self_test's frame is gone.
@@ -811,12 +914,18 @@ Estate-Task: m9/T7"
   assert_eq "$(printf 'estate-task|m9|T7' | sha256sum | cut -d' ' -f1 | cut -c1-32)" "$g" \
     "a mission PR joins the task's trace, computed from the ids alone"
 
-  # --- 7. a PR with no trailer gets its own trace, linked by vcs.change.id
+  # --- 7. a PR with no trailer gets its own trace, linked by vcs.change.id.
+  # Run inside the fixture repo at its untrailered HEAD, not in whatever
+  # checkout the self-test happens to be running from: this repo's own HEAD may
+  # well carry a mission trailer, and reading that would make "no trailer" a
+  # claim about the environment instead of about the code.
   unset OTELSPAN_TASK
-  OTELSPAN_JOB_KEY="reusable-node:build" OTELSPAN_PIPELINE_NAME="validate" OTELSPAN_RUN_ID="7" \
-    OTELSPAN_RUN_ATTEMPT="1" OTELSPAN_REPOSITORY="Rylee-Bee/vefr" OTELSPAN_CHANGE_ID="314" \
-    OTELSPAN_RUNNER_LABEL="ubuntu-latest" \
-    bash "$SELF" context --env-file "$tmp/ctx-untrailered.env" >/dev/null
+  ( cd "$repo" && OTELSPAN_JOB_KEY="reusable-node:build" OTELSPAN_PIPELINE_NAME="validate" \
+      OTELSPAN_RUN_ID="7" OTELSPAN_RUN_ATTEMPT="1" OTELSPAN_REPOSITORY="Rylee-Bee/vefr" \
+      OTELSPAN_CHANGE_ID="314" OTELSPAN_RUNNER_LABEL="ubuntu-latest" \
+      bash "$SELF" context --env-file "$tmp/ctx-untrailered.env" >/dev/null )
+  assert_eq "2" "$(grep -cE "^otel_(mission|task)_id=''$" "$tmp/ctx-untrailered.env")" \
+    "an untrailered run computes no mission and no task id"
   g=$(grep '^otel_trace_id=' "$tmp/ctx-untrailered.env" | cut -d= -f2- | tr -d "'")
   if [ "${#g}" -eq 32 ] && [ "$g" != "$(printf 'estate-task||' | sha256sum | cut -d' ' -f1 | cut -c1-32)" ]; then
     ok "a PR with no Estate-Task trailer gets its own 32-hex trace id"
@@ -826,7 +935,61 @@ Estate-Task: m9/T7"
   assert_eq "otel_change_id='314'" "$(grep '^otel_change_id=' "$tmp/ctx-untrailered.env")" \
     "an untrailered run is still linked back by vcs.change.id"
 
-  # --- 8. a GitHub-hosted runner never emits a span that cannot arrive (§1)
+  # --- 8. the Project Home request body carries the task ids, and only when
+  # there are any. A span in the right trace with no ids is a span a backend
+  # cannot join to anything once the trace is gone, and a mission runs for days,
+  # so these two keys are the only thing that outlives the trace.
+  local ph_action
+  for ph_action in claim heartbeat finish; do
+    ph_body "$ph_action" "$tmp/ctx-git.env" >"$tmp/ph-$ph_action.json"
+    got=$(ph_ids "$tmp/ph-$ph_action.json")
+    assert_eq "m9 T7" "$got" "with the trailer, a $ph_action body carries mission_id and mission_task_id from it"
+
+    ph_body "$ph_action" "$tmp/ctx-untrailered.env" >"$tmp/ph-$ph_action-un.json"
+    got=$(ph_ids "$tmp/ph-$ph_action-un.json")
+    assert_eq "- -" "$got" "with no trailer, a $ph_action body carries neither key — no stand-in, no empty string"
+  done
+
+  ph_body notice "$tmp/ctx-git.env" >"$tmp/ph-notice.json"
+  assert_eq "- -" "$(ph_ids "$tmp/ph-notice.json")" \
+    "a notice belongs to no task and carries neither key, trailer or not"
+  assert_eq "self-smoke" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["key"])' "$tmp/ph-notice.json")" \
+    "the notice body is otherwise unchanged by the ids going into the other three"
+
+  # The whole request as it goes on the wire: the ids in the body, and the
+  # traceparent still in the header, derived from the same ids and untouched by
+  # any of this. The helper stays out of argv for the bearer token; the
+  # traceparent rides the same `--config -` pipe the template uses.
+  local ph_traceparent ph_span
+  ph_traceparent=$(sed -n "s/^otel_traceparent='\(.*\)'\$/\1/p" "$tmp/ctx-git.env")
+  ph_span=$(sed -n "s/^otel_span_id='\(.*\)'\$/\1/p" "$tmp/ctx-git.env")
+  assert_eq "00-$(printf 'estate-task|m9|T7' | sha256sum | cut -d' ' -f1 | cut -c1-32)-${ph_span}-01" "$ph_traceparent" \
+    "the traceparent still rides the mission task's trace, unchanged by this"
+
+  : >"$RX_DIR/bodies.jsonl"
+  local code
+  code=$(
+    printf 'header = "traceparent: %s"\n' "$ph_traceparent" | curl --config - \
+      --silent --show-error --output /dev/null --write-out '%{http_code}' \
+      --request POST --header "Content-Type: application/json" \
+      --data-binary @"$tmp/ph-claim.json" "$RX_URL")
+  assert_eq "200" "$code" "the reporter's POST to Project Home still carries a body and a traceparent"
+
+  got=$(bodies | tail -n1 | python3 -c '
+import json,sys
+r = json.loads(sys.stdin.read())
+print(r["headers"].get("traceparent", "-"), r["body"].get("mission_id", "-"),
+      r["body"].get("mission_task_id", "-"), r["body"]["actor"], r["body"]["lease_seconds"])')
+  assert_eq "${ph_traceparent} m9 T7 gha:Rylee-Bee/vefr:7 900" "$got" \
+    "the request that arrived carries the traceparent in the header and both ids in the body"
+
+  printf '\n--- one real Project Home request body this self-test captured ---\n'
+  printf 'POST /api/ci/tasks/42/claim\ntraceparent: %s\n\n' "$ph_traceparent"
+  cat "$tmp/ph-claim.json"
+  printf '\n'
+  printf -- '--- end body ---\n\n'
+
+  # --- 9. a GitHub-hosted runner never emits a span that cannot arrive (§1)
   : >"$RX_DIR/bodies.jsonl"
   OTEL_EXPORTER_OTLP_ENDPOINT="$RX_URL" GITHUB_STEP_SUMMARY="$tmp/summary.md" \
     bash "$SELF" ci-emit --env-file "$tmp/ctx-untrailered.env" --role job --result success >/dev/null
@@ -837,7 +1000,7 @@ Estate-Task: m9/T7"
     nope "host-class github-hosted says so in the step summary instead of failing silently"
   fi
 
-  # --- 9. an unreachable Collector costs one timeout, then nothing, and never fails
+  # --- 10. an unreachable Collector costs one timeout, then nothing, and never fails
   unset OTEL_EXPORTER_OTLP_ENDPOINT
   local t0 t1 rc
   t0=$(date +%s%N)
@@ -856,7 +1019,7 @@ Estate-Task: m9/T7"
   fi
   rm -f "$OTEL_BREAKER_FILE"
 
-  # --- 10. a Collector answering 500 trips the breaker after one send
+  # --- 11. a Collector answering 500 trips the breaker after one send
   stop_receiver
   start_receiver 500 || { printf 'self-test: could not start the failing receiver\n' >&2; exit 1; }
   OTEL_EXPORTER_OTLP_ENDPOINT="$RX_URL" bash "$SELF" ci-emit --env-file "$ctx" --role pipeline --result failure >/dev/null

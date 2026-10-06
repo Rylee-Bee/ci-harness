@@ -13,7 +13,10 @@ name: reusable-project-home
 # Telemetry: this job carries a `cicd.pipeline.task.*` span and hands Project
 # Home a W3C `traceparent` on its /api/ci call, which is the whole point of the
 # reporter being instrumented (homelab docs/observability/TELEMETRY-CONTRACT.md
-# §2 and §6). It does NOT
+# §2 and §6). When that trace context also knows the mission and task ids, the
+# claim, heartbeat and finish bodies carry `mission_id` and `mission_task_id`
+# too, so Project Home's own ci.task.* spans are joinable after the trace is
+# gone — a mission runs for days and no single trace spans it. It does NOT
 # check out the repository — a reporter must stay cheap, and cloning the caller
 # to read one commit trailer would put telemetry ahead of the work it observes.
 # So this run's own trace is used, linked back by vcs.change.id. OpenTelemetry
@@ -242,7 +245,29 @@ jobs:
           export PH_ACTOR="$actor"
           export PH_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-          python3 - <<'PY' > "$RUNNER_TEMP/project-home-request.json"
+          # The body is built by the same helper that computed the trace context
+          # above, from the same env-file the trace was derived from, so the ids
+          # on the wire are exactly the ids this run's spans are recorded under.
+          # Project Home joins them onto its own ci.task.* spans: with the
+          # Estate-Task trailer both `mission_id` and `mission_task_id` go out,
+          # and with none neither key is written — an absent id is honest, an
+          # invented one would join this run to a task it is not working on.
+          # Staged, then moved: a helper that dies mid-write must not leave a
+          # half a body to be POSTed.
+          request="$RUNNER_TEMP/project-home-request.json"
+          staged="$request.staged"
+          if [ -s "${OTELSPAN_HELPER:-}" ] && [ -s "${OTELSPAN_ENV_FILE:-}" ]; then
+            bash "$OTELSPAN_HELPER" project-home-body --env-file "$OTELSPAN_ENV_FILE" \
+              >"$staged" 2>/dev/null || true
+          fi
+          if [ ! -s "$staged" ]; then
+            # Telemetry is off, or the helper could not be fetched. Reporting is
+            # this job's work and telemetry is not, so the same request still
+            # goes out — uncorrelated, because with no helper there are no ids to
+            # send. This mirrors the helper's `project-home-body`, which is the
+            # shape of record; keep the two in step if either moves.
+            echo "otel: span helper unavailable; the Project Home request carries no mission/task ids"
+            python3 - <<'PY' > "$staged"
           import json
           import os
 
@@ -269,6 +294,8 @@ jobs:
               }
           print(json.dumps(payload, separators=(",", ":")))
           PY
+          fi
+          mv -f "$staged" "$request"
 
           if [ "$PH_SELF_SMOKE" = "1" ]; then
             if [ "$GITHUB_REPOSITORY" != "Rylee-Bee/ci-harness" ]; then
@@ -286,6 +313,25 @@ jobs:
           if os.environ["PH_ACTION"] == "notice":
               assert payload["key"] == os.environ["PH_NOTICE_KEY"]
               assert payload["title"] == os.environ["PH_NOTICE_TITLE"]
+              # A notice belongs to no task, so it carries no task identity.
+              assert "mission_id" not in payload and "mission_task_id" not in payload, payload
+          # A claim/heartbeat/finish carries the two ids exactly when this run's
+          # context computed them — never a stand-in for them.
+          ctx = Path(os.environ["RUNNER_TEMP"], "otel-ctx.env")
+          if ctx.is_file() and os.environ["PH_ACTION"] != "notice":
+              found = dict(
+                  line.split("=", 1)
+                  for line in ctx.read_text().splitlines()
+                  if line.startswith(("otel_mission_id=", "otel_task_id="))
+              )
+              mission = found.get("otel_mission_id", "''").strip("'")
+              task = found.get("otel_task_id", "''").strip("'")
+              if mission and task:
+                  assert payload.get("mission_id") == mission, payload
+                  assert payload.get("mission_task_id") == task, payload
+              else:
+                  assert "mission_id" not in payload, payload
+                  assert "mission_task_id" not in payload, payload
           print("Project Home reporter self-smoke: request construction OK")
           PY
             otel pipeline success

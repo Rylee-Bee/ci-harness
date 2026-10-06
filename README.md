@@ -187,7 +187,13 @@ off HEAD and derives the trace from the ids alone
 (`sha256("estate-task|<mission>|<task>")`, first 32 hex) with no shared state.
 A PR without the trailer gets its own trace, linked back by `vcs.change.id`.
 The Project Home reporter sends the resulting `traceparent` on its `/api/ci`
-call, which is how Project Home's own spans land in the same trace.
+call, which is how Project Home's own spans land in the same trace — and its
+claim, heartbeat and finish bodies carry the two ids themselves
+(`mission_id`, `mission_task_id`), read from that same context, so Project
+Home's `ci.task.*` spans are still joinable after the trace is gone: a mission
+runs for days and no one trace spans it. With no trailer **neither key is
+sent** — no empty string, no repo-name or run-id stand-in — and a notice, which
+belongs to no task, never carries them either.
 
 Two self-smoke jobs prove this without a Collector: `otel-selftest` runs
 `scripts/otel-span.sh --self-test` (a throwaway OTLP receiver on 127.0.0.1,
