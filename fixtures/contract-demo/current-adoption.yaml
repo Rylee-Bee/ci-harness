@@ -13,6 +13,6 @@ schema: play-nice/adoption-v1
 project: ci-harness-fixture-current
 source:
   repository: Rylee-Bee/play-nice-contracts
-  revision: b27eb86a56ef235cead4daf7791bf15805577143   # re-pinned 2026-10-06: follows play-nice-contracts main; changed since a11563b1: no contract changed — `git diff --stat a11563b1..b27eb86 -- contracts/` is empty and VERSION stays 2.0.0; only research landed (#54 portable agent receipt shape survey, #56/#60 CUE-behind-manifests)
+  revision: 4f0f4fa0a1278f8b1013963df28bcfadc150d466   # re-pinned 2026-10-06: follows play-nice-contracts main; changed since b27eb86: no contract changed — `git diff --stat b27eb86..4f0f4fa -- contracts/ VERSION` is empty and VERSION stays 2.0.0; the net change is +10 lines in `tools/pin-sync/pin-sync.timer`, giving it a wall-clock anchor (#62)
 always:
   - assume-unknown
