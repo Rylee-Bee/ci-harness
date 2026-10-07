@@ -16,12 +16,13 @@ Estate rules: `~/.agents/AGENTS.md` and `play-nice-contracts/contracts/everyone/
 
 | Path | Kind | Purpose | Open it? |
 |---|---|---|---|
-| `.github/workflows/reusable-*.yml` | source | the seven templates consumers call via `uses:` (python, node, container-smoke, contract-freshness, uat, secret-scan, project-home) | yes, when changing a template |
+| `.github/workflows/reusable-*.yml` | source | the eight templates consumers call via `uses:` (python, node, container-smoke, contract-freshness, uat, secret-scan, project-home, claims-policy) | yes, when changing a template |
 | `.github/workflows/self-smoke.yml` | source | **real execution** of every template against `fixtures/` | yes, with any template change |
 | `.github/workflows/actionlint-selfcheck.yml` | source | static lint of all workflows with checksum-pinned actionlint | rarely |
 | `.github/workflows/secret-scan-selfcheck.yml` | source | runs `reusable-secret-scan.yml` on this repo (full history) | rarely |
 | `pins/ACTIONS.md` | docs/contract | every pinned action SHA, binary sha256, toolchain default, and the bump protocol | yes, before touching any `uses:` SHA or version default |
 | `README.md` | docs | adoption guide, template table, permissions + visibility rules, freshness semantics | yes; keep in sync with template inputs |
+| `policy/claims.rego`, `policy/claims_test.rego`, `scripts/verify-claim.sh`, `tests/test_claim_policy_drift.py` | source | **canonical** honest-claims policy: the conftest policy, its bash mirror for commit-time hooks, and the drift test that proves the two agree. `reusable-claims-policy.yml` serves these to consumers at their pinned revision; homelab predates the template and keeps its own copies, checked by the same drift test |
 | `fixtures/*-demo/` | fixtures | minimal projects self-smoke drives (py, node, container, uat, contract) | when the matching template changes |
 | `fixtures/contract-demo/current-adoption.yaml` | fixture | CURRENT pin; moved by the Play-Nice pin robot (`chore(play-nice): pin …` PRs) | don't hand-edit |
 | `fixtures/contract-demo/stale-adoption.yaml` | fixture | permanently stale pin; MUST stay red | never "fix" it |

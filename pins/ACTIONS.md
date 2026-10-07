@@ -23,6 +23,7 @@ upstream tag on the pin date (never copied blindly from an older workflow).
 
 | Binary | Version | sha256 | Used in | Verified |
 |---|---|---|---|---|
+| [open-policy-agent/conftest](https://github.com/open-policy-agent/conftest) (linux tarball) | 0.69.0 | (release checksum not separately pinned — see note) | reusable-claims-policy.yml | version matches homelab's `tools/toolbox/versions.json`, which CI already pins; **TODO: pin the tarball sha256** |
 | [rhysd/actionlint](https://github.com/rhysd/actionlint) (linux_amd64 tarball) | 1.7.12 | `8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8` | actionlint-selfcheck.yml | official `checksums.txt` + release-API `digest` + independent re-download 2026-09-21 (first selfcheck run FAILED the gate on a transcription error — mechanism proven) |
 
 ## Toolchain & base-image pins

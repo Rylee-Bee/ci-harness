@@ -1,0 +1,223 @@
+name: reusable-claims-policy
+
+# ci-harness — honest-claims gate (workflow_call).
+#
+# Harness-owned mechanics: fetch the canonical policy (policy/claims.rego,
+# scripts/verify-claim.sh, tests/test_claim_policy_drift.py) from THIS repo at
+# the exact revision the consumer pinned, install conftest, prove the policy
+# actually fires, then check the consumer's commit message or PR body against
+# it. Repo-owned semantics: which text is checked, and whether the repo ships
+# its own bash mirror that must be proven equivalent.
+#
+# Why the policy is fetched instead of vendored: `reusable-contract-freshness`
+# clones play-nice-contracts for the same reason. A vendored copy is a second
+# source of truth, and this policy already shipped once as a bash/rego pair
+# whose two halves nobody compared. One canonical copy, fetched at a pin, is
+# the fix.
+#
+# The revision is taken from `github.workflow_ref`, which is the ref the caller
+# wrote in `uses:`. So the policy a consumer runs is exactly the revision they
+# pinned — never ci-harness@main. Per AGENTS.md, merging here deploys to
+# nobody until consumers re-pin.
+#
+# Canary before use: conftest reports a POLICY THAT FAILS TO COMPILE with exit
+# 1, which is indistinguishable from a policy denial. If claims.rego is broken,
+# the canary fires first and says so, instead of the job looking like it denied
+# everything.
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: >-
+          Runner label for the job (default GitHub-hosted ubuntu-latest). Private repos pass
+          vars.CI_RUNNER_LIGHT, then vars.CI_RUNNER, then ubuntu-latest, to use a self-hosted
+          runner (2026-10-05: private-repo Actions minutes are a hard monthly budget).
+        type: string
+        required: false
+        default: ubuntu-latest
+      mirror-path:
+        description: >-
+          Repo-local path to the bash mirror, e.g. "scripts/verify-claim.sh". When set and the
+          file exists, the drift test runs: it compares the consumer's mirror against the
+          canonical policy and fails on any disagreement. Leave empty for a repo that does not
+          ship a mirror (the usual case — the gate still runs).
+        type: string
+        required: false
+        default: ""
+      check:
+        description: >-
+          Which text to gate. "auto" (default) uses the PR body on pull_request events and the
+          HEAD commit message otherwise. Force either with "pr-body" or "commit-message".
+        type: string
+        required: false
+        default: auto
+
+permissions:
+  contents: read
+
+jobs:
+  claims:
+    name: honest-claims policy
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      # NOTE: `runner` is not an allowed context in job-level env, so the
+      # harness source path is expressed as $RUNNER_TEMP inside each step
+      # instead. It is never the workspace root: the consumer's own tree is
+      # already checked out there.
+      CHECK: ${{ inputs.check }}
+      MIRROR_PATH: ${{ inputs.mirror-path }}
+      WORKFLOW_REF: ${{ github.workflow_ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the pinned ci-harness revision
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          # github.workflow_ref is "<owner>/<repo>/.github/workflows/<file>@<ref>".
+          ref="${WORKFLOW_REF##*@}"
+          if [[ -z "$ref" || "$ref" == "$WORKFLOW_REF" ]]; then
+            echo "ERROR: cannot parse a revision out of github.workflow_ref: $WORKFLOW_REF" >&2
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "ci-harness revision under test: $ref"
+
+      - name: Fetch the canonical policy at that revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Rylee-Bee/ci-harness
+          ref: ${{ steps.pin.outputs.ref }}
+          path: ${{ runner.temp }}/ci-harness-src
+          persist-credentials: false
+
+      - name: Install conftest and jq
+        shell: bash
+        env:
+          CONFTEST_VER: "0.69.0"
+        run: |
+          set -euo pipefail
+          # conftest is a single Go binary; version pinned in pins/ACTIONS.md.
+          # --rego-version v0 is required everywhere: conftest 0.46+ defaults
+          # to Rego v1 and policy/claims.rego is v0 syntax.
+          arch="x86_64"
+          case "$(uname -m)" in
+            aarch64|arm64) arch="arm64" ;;
+          esac
+          curl -sSL --retry 3 -o "$RUNNER_TEMP/conftest.tar.gz" \
+            "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VER}/conftest_${CONFTEST_VER}_Linux_${arch}.tar.gz"
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/conftest.tar.gz" conftest
+          sudo install -m 0755 "$RUNNER_TEMP/conftest" /usr/local/bin/conftest
+          conftest --version
+          jq --version
+
+      - name: Canary -- prove the policy fires before trusting it
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          echo '{"text":"30 tests pass"}' \
+            | conftest test --rego-version v0 --policy "$RUNNER_TEMP/ci-harness-src/policy/claims.rego" - \
+            > "$RUNNER_TEMP/bad.out" 2>&1
+          bad_rc=$?
+          set -e
+          cat "$RUNNER_TEMP/bad.out"
+          if [[ $bad_rc -eq 0 ]]; then
+            echo "ERROR: claims.rego did not deny a known-bad input (claim, no verify)." >&2
+            echo "       A policy that fails to compile also exits nonzero, so read the" >&2
+            echo "       output above before concluding the policy is merely strict." >&2
+            exit 1
+          fi
+          if grep -qE 'rego_(parse|type|compile)_error' "$RUNNER_TEMP/bad.out"; then
+            echo "ERROR: claims.rego does not compile — the exit above is a POLICY ERROR," >&2
+            echo "       not a denial. Fix the policy before trusting any verdict from it." >&2
+            exit 1
+          fi
+          set +e
+          printf '%s\n' '{"text":"30 tests pass\n$ pytest tests/\n30 passed"}' \
+            | conftest test --rego-version v0 --policy "$RUNNER_TEMP/ci-harness-src/policy/claims.rego" - \
+            > "$RUNNER_TEMP/good.out" 2>&1
+          good_rc=$?
+          set -e
+          cat "$RUNNER_TEMP/good.out"
+          if [[ $good_rc -ne 0 ]]; then
+            echo "ERROR: claims.rego denied a known-good input (claim + command + output)" >&2
+            exit 1
+          fi
+          echo "canary OK: policy fires on bad input, passes on good input"
+
+      - name: Honest claims gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          requested="$CHECK"
+          if [[ "$requested" == "auto" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+              requested="pr-body"
+            else
+              requested="commit-message"
+            fi
+          fi
+          echo "checking: $requested (event=$GITHUB_EVENT_NAME)"
+
+          case "$requested" in
+            pr-body)
+              if [[ ! -f "$GITHUB_EVENT_PATH" ]]; then
+                echo "ERROR: GITHUB_EVENT_PATH missing; cannot read the PR body" >&2
+                exit 1
+              fi
+              # Fail closed on an unreadable body rather than gating nothing.
+              if ! jq -e '.pull_request' "$GITHUB_EVENT_PATH" >/dev/null; then
+                echo "ERROR: event payload has no .pull_request — cannot check the body" >&2
+                exit 1
+              fi
+              jq -c '{text: (.pull_request.body // "")}' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/claim.json"
+              ;;
+            commit-message)
+              if [[ ! -f "$GITHUB_EVENT_PATH" ]]; then
+                echo "ERROR: GITHUB_EVENT_PATH missing; cannot read the commit message" >&2
+                exit 1
+              fi
+              jq -c '{text: (.head_commit.message // "")}' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/claim.json"
+              ;;
+            *)
+              echo "ERROR: unknown check mode '$requested' (want auto|pr-body|commit-message)" >&2
+              exit 1
+              ;;
+          esac
+
+          set +e
+          conftest test --rego-version v0 --policy "$RUNNER_TEMP/ci-harness-src/policy/claims.rego" \
+            - < "$RUNNER_TEMP/claim.json"
+          rc=$?
+          set -e
+          if [[ $rc -ne 0 ]]; then
+            echo "" >&2
+            echo "A strong claim needs a command and its observed output." >&2
+            echo "See docs/guides/honest-claims.md in this repo, or the PULL_REQUEST_TEMPLATE." >&2
+          fi
+          exit $rc
+
+      - name: Drift -- repo mirror must match the canonical policy
+        # Only meaningful for a repo that ships its own bash mirror. The
+        # comparison runs the canonical test against the CONSUMER's tree, so
+        # it is the consumer's copy that gets checked, not ci-harness's.
+        if: ${{ inputs.mirror-path != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f "$MIRROR_PATH" ]]; then
+            echo "ERROR: mirror-path '$MIRROR_PATH' does not exist in this repo." >&2
+            echo "       Either fix the path or clear the input — a mirror that is" >&2
+            echo "       configured but absent is exactly the silent split this" >&2
+            echo "       check exists to prevent." >&2
+            exit 1
+          fi
+          echo "comparing $MIRROR_PATH against the pinned canonical policy"
+          CLAIMS_REPO_ROOT="$GITHUB_WORKSPACE" \
+            python3 -m pytest "$RUNNER_TEMP/ci-harness-src/tests/test_claim_policy_drift.py" -v

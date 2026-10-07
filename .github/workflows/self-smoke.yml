@@ -178,3 +178,15 @@ jobs:
           python3 "$RUNNER_TEMP/library/tools/contractctl/contractctl.py" \
             freshness --manifest "$RUNNER_TEMP/current.adoption.yaml" --json
           echo "CURRENT — live-pinned manifest correctly GREEN"
+
+  # Real-execution proof for the honest-claims template. ci-harness is its own
+  # first consumer: it ships policy/, scripts/verify-claim.sh and the drift
+  # test at the repo root, so `mirror-path` exercises the comparison branch
+  # rather than skipping it. A template whose only proof were static parsing
+  # would not prove it fetches the right revision, installs conftest, or runs
+  # the canary before trusting a verdict.
+  claims-policy:
+    name: claims policy template
+    uses: ./.github/workflows/reusable-claims-policy.yml
+    with:
+      mirror-path: "scripts/verify-claim.sh"
