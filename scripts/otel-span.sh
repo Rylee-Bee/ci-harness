@@ -455,7 +455,7 @@ cmd_ci_emit() {
   # summary rather than emitting a span that cannot arrive.
   if [ "${otel_host_class:-unknown}" = "github-hosted" ]; then
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      printf '### OpenTelemetry\n\nHost class is `github-hosted`; the LAN Collector is unreachable from this runner, so no span was emitted. Missing telemetry is UNKNOWN, not a failure.\n' >>"$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+      printf '### OpenTelemetry\n\nHost class is github-hosted; the LAN Collector is unreachable from this runner, so no span was emitted. Missing telemetry is UNKNOWN, not a failure.\n' >>"$GITHUB_STEP_SUMMARY" 2>/dev/null || true
     fi
     printf 'otel-span: host-class github-hosted — Collector unreachable from this runner, span not emitted\n'
     rm -rf "$dir"
@@ -1136,8 +1136,12 @@ Estate-Task: m9/T7"
   fi
   # Same wording on both sides, so the two guards cannot drift apart: one of them
   # explaining something the other would not is how a step starts looking exempt.
-  guard_line=$(grep -m1 "Host class is .github-hosted" "$SELF" | sed "s/^[[:space:]]*printf '//")
-  helper_line=$(grep -m1 "Host class is .github-hosted" "$wf" | sed "s/^[[:space:]]*printf '//")
+  # The sentence carries no markdown backticks: a backtick inside the single-quoted
+  # `run:` body reads as command substitution to shellcheck (SC2016), which fails
+  # the actionlint gate. The locator matches the bare sentence; the equality below
+  # is unchanged and still byte-for-byte.
+  guard_line=$(grep -m1 "Host class is github-hosted" "$SELF" | sed "s/^[[:space:]]*printf '//")
+  helper_line=$(grep -m1 "Host class is github-hosted" "$wf" | sed "s/^[[:space:]]*printf '//")
   if [ -n "$guard_line" ] && [ "$guard_line" = "$helper_line" ]; then
     ok "the reporter step's hosted-runner note is the helper's own sentence, verbatim"
   else

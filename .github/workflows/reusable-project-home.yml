@@ -196,7 +196,7 @@ jobs:
             fi
             if [ "${otel_host_class:-unknown}" = "github-hosted" ]; then
               if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-                printf '### OpenTelemetry\n\nHost class is `github-hosted`; the LAN Collector is unreachable from this runner, so no span was emitted. Missing telemetry is UNKNOWN, not a failure.\n' >>"$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+                printf '### OpenTelemetry\n\nHost class is github-hosted; the LAN Collector is unreachable from this runner, so no span was emitted. Missing telemetry is UNKNOWN, not a failure.\n' >>"$GITHUB_STEP_SUMMARY" 2>/dev/null || true
               fi
               echo "otel: host-class github-hosted — Collector unreachable from this runner, span not emitted"
               return 0
