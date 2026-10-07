@@ -61,10 +61,12 @@ jobs:
     name: honest-claims policy
     runs-on: ${{ inputs.runs-on }}
     env:
-      # NOTE: `runner` is not an allowed context in job-level env, so the
-      # harness source path is expressed as $RUNNER_TEMP inside each step
-      # instead. It is never the workspace root: the consumer's own tree is
-      # already checked out there.
+      # Where the canonical policy lands. It MUST be under GITHUB_WORKSPACE:
+      # actions/checkout refuses any `path:` outside the workspace
+      # ("Repository path ... is not under ..."), which is what runner.temp
+      # (/home/runner/work/_temp) is. A dot-prefixed subdirectory keeps it
+      # out of the consumer's tree without colliding with it.
+      HARNESS_SRC: ${{ github.workspace }}/.ci-harness-src
       CHECK: ${{ inputs.check }}
       MIRROR_PATH: ${{ inputs.mirror-path }}
       WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -92,7 +94,7 @@ jobs:
         with:
           repository: Rylee-Bee/ci-harness
           ref: ${{ steps.pin.outputs.ref }}
-          path: ${{ runner.temp }}/ci-harness-src
+          path: ${{ github.workspace }}/.ci-harness-src
           persist-credentials: false
 
       - name: Install conftest and jq
@@ -121,7 +123,7 @@ jobs:
           set -euo pipefail
           set +e
           echo '{"text":"30 tests pass"}' \
-            | conftest test --rego-version v0 --policy "$RUNNER_TEMP/ci-harness-src/policy/claims.rego" - \
+            | conftest test --rego-version v0 --policy "$HARNESS_SRC/policy/claims.rego" - \
             > "$RUNNER_TEMP/bad.out" 2>&1
           bad_rc=$?
           set -e
@@ -139,7 +141,7 @@ jobs:
           fi
           set +e
           printf '%s\n' '{"text":"30 tests pass\n$ pytest tests/\n30 passed"}' \
-            | conftest test --rego-version v0 --policy "$RUNNER_TEMP/ci-harness-src/policy/claims.rego" - \
+            | conftest test --rego-version v0 --policy "$HARNESS_SRC/policy/claims.rego" - \
             > "$RUNNER_TEMP/good.out" 2>&1
           good_rc=$?
           set -e
@@ -192,7 +194,7 @@ jobs:
           esac
 
           set +e
-          conftest test --rego-version v0 --policy "$RUNNER_TEMP/ci-harness-src/policy/claims.rego" \
+          conftest test --rego-version v0 --policy "$HARNESS_SRC/policy/claims.rego" \
             - < "$RUNNER_TEMP/claim.json"
           rc=$?
           set -e
@@ -220,4 +222,4 @@ jobs:
           fi
           echo "comparing $MIRROR_PATH against the pinned canonical policy"
           CLAIMS_REPO_ROOT="$GITHUB_WORKSPACE" \
-            python3 -m pytest "$RUNNER_TEMP/ci-harness-src/tests/test_claim_policy_drift.py" -v
+            python3 -m pytest "$HARNESS_SRC/tests/test_claim_policy_drift.py" -v
