@@ -189,4 +189,9 @@ jobs:
     name: claims policy template
     uses: ./.github/workflows/reusable-claims-policy.yml
     with:
+      # A local `./` reference means the policy under test lives in this very
+      # commit, so the head SHA is the right "pinned" revision here. On a
+      # pull_request, github.sha is the synthetic merge commit; the head SHA is
+      # a real object in this repo and is what carries the new files.
+      policy-revision: ${{ github.event.pull_request.head.sha || github.sha }}
       mirror-path: "scripts/verify-claim.sh"

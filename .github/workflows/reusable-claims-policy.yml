@@ -15,10 +15,20 @@ name: reusable-claims-policy
 # whose two halves nobody compared. One canonical copy, fetched at a pin, is
 # the fix.
 #
-# The revision is taken from `github.workflow_ref`, which is the ref the caller
-# wrote in `uses:`. So the policy a consumer runs is exactly the revision they
-# pinned — never ci-harness@main. Per AGENTS.md, merging here deploys to
-# nobody until consumers re-pin.
+# The revision comes from the `policy-revision` input, which the caller sets to
+# the same SHA it writes in `uses:`. That is NOT redundant: there is no context
+# property that exposes a called reusable workflow's own ref. `github.workflow_ref`
+# looks like it should, but it resolves to the CALLER's workflow — proven, not
+# assumed: ci-harness's own self-smoke logged
+#   WORKFLOW_REF: Rylee-Bee/ci-harness/.github/workflows/self-smoke.yml@refs/pull/28/merge
+# i.e. the caller, not reusable-claims-policy.yml. `github.job_workflow_sha` would
+# be the right property if it existed; actionlint 1.7.12's schema does not list it
+# and the docs page did not confirm it, so this template does not rely on it.
+#
+# The consequence is a duplicated SHA, so the checkout is VERIFIED after the
+# fact: the job asserts the fetched tree really is the requested commit and
+# prints it. A caller who bumps `uses:` but forgets the input gets a stale
+# policy and a log line that says which SHA actually ran.
 #
 # Canary before use: conftest reports a POLICY THAT FAILS TO COMPILE with exit
 # 1, which is indistinguishable from a policy denial. If claims.rego is broken,
@@ -28,6 +38,14 @@ name: reusable-claims-policy
 on:
   workflow_call:
     inputs:
+      policy-revision:
+        description: >-
+          ci-harness commit SHA to fetch the policy from — the SAME SHA as the
+          `uses:` line that calls this template. Required: there is no context
+          property exposing a reusable workflow's own ref. The job verifies the
+          checkout landed on it and prints the revision that actually ran.
+        type: string
+        required: true
       runs-on:
         description: >-
           Runner label for the job (default GitHub-hosted ubuntu-latest). Private repos pass
@@ -69,25 +87,25 @@ jobs:
       HARNESS_SRC: ${{ github.workspace }}/.ci-harness-src
       CHECK: ${{ inputs.check }}
       MIRROR_PATH: ${{ inputs.mirror-path }}
-      WORKFLOW_REF: ${{ github.workflow_ref }}
+      POLICY_REVISION: ${{ inputs.policy-revision }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Resolve the pinned ci-harness revision
+      - name: Resolve and validate the pinned ci-harness revision
         id: pin
         shell: bash
         run: |
           set -euo pipefail
-          # github.workflow_ref is "<owner>/<repo>/.github/workflows/<file>@<ref>".
-          ref="${WORKFLOW_REF##*@}"
-          if [[ -z "$ref" || "$ref" == "$WORKFLOW_REF" ]]; then
-            echo "ERROR: cannot parse a revision out of github.workflow_ref: $WORKFLOW_REF" >&2
+          rev="$POLICY_REVISION"
+          if [[ ! "$rev" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: policy-revision must be a 40-character commit SHA, got: '$rev'" >&2
+            echo "       Set it to the same SHA as this template's uses: line." >&2
             exit 1
           fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-          echo "ci-harness revision under test: $ref"
+          echo "ref=$rev" >> "$GITHUB_OUTPUT"
+          echo "requested ci-harness revision: $rev"
 
       - name: Fetch the canonical policy at that revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,6 +114,20 @@ jobs:
           ref: ${{ steps.pin.outputs.ref }}
           path: ${{ github.workspace }}/.ci-harness-src
           persist-credentials: false
+
+      - name: Verify the checkout is the requested revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git -C "$HARNESS_SRC" rev-parse HEAD)"
+          requested="$POLICY_REVISION"
+          echo "requested: $requested"
+          echo "actual   : $actual"
+          if [[ "$actual" != "$requested" ]]; then
+            echo "ERROR: fetched policy is not the pinned revision." >&2
+            exit 1
+          fi
+          echo "policy revision verified"
 
       - name: Install conftest and jq
         shell: bash
@@ -221,5 +253,9 @@ jobs:
             exit 1
           fi
           echo "comparing $MIRROR_PATH against the pinned canonical policy"
+          # The runner's system python3 has no pytest, and the drift test needs
+          # it plus conftest and jq. Fail loudly rather than skipping: a check
+          # that quietly does nothing is worse than no check.
+          python3 -m pip install --quiet --disable-pip-version-check pytest
           CLAIMS_REPO_ROOT="$GITHUB_WORKSPACE" \
             python3 -m pytest "$HARNESS_SRC/tests/test_claim_policy_drift.py" -v
