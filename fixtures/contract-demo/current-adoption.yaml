@@ -13,6 +13,6 @@ schema: play-nice/adoption-v1
 project: ci-harness-fixture-current
 source:
   repository: Rylee-Bee/play-nice-contracts
-  revision: 4f0f4fa0a1278f8b1013963df28bcfadc150d466   # re-pinned 2026-10-06: follows play-nice-contracts main; changed since b27eb86: no contract changed — `git diff --stat b27eb86..4f0f4fa -- contracts/ VERSION` is empty and VERSION stays 2.0.0; the net change is +10 lines in `tools/pin-sync/pin-sync.timer`, giving it a wall-clock anchor (#62)
+  revision: d0bb0b29cb8c250b5448c3f560e862b68ac4a653   # re-pinned 2026-10-07: play-nice-contracts was force-pushed at 2026-10-06T21:14Z, orphaning 4f0f4fa. d0bb0b2 is the same commit re-anchored onto the surviving history — `git diff --stat 4f0f4fa..d0bb0b2` is empty over the WHOLE tree, so not one byte of contracts/ or VERSION changes. Only the revision moves.
 always:
   - assume-unknown
