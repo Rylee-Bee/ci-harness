@@ -193,6 +193,17 @@ cannot arrive.
 off HEAD and derives the trace from the ids alone
 (`sha256("estate-task|<mission>|<task>")`, first 32 hex) with no shared state.
 A PR without the trailer gets its own trace, linked back by `vcs.change.id`.
+
+`reusable-project-home.yml` has **no checkout** — a reporter must stay cheap,
+and cloning the caller to read one commit trailer would put telemetry ahead of
+the work it observes. It reads the same trailer the other way: one API read of
+the head commit's message, `gh api repos/<owner>/<repo>/commits/<sha>`, with
+the job token passed in the environment and never in argv. The API is consulted
+only when the job has no local object store to read it from, so a checked-out
+template spends no API call; and without `gh`, a token, or a hex sha the read is
+simply not attempted. It is a read of one commit message, not a checkout, and it
+can only ever *add* the correlation — it never invents ids, so an untrailered
+reporter still sends no header, exactly as before.
 The Project Home reporter sends the resulting `traceparent` on its `/api/ci`
 call, which is how Project Home's own spans land in the same trace — and the
 claim, heartbeat and finish calls carry the two ids as an `Estate-Task` request

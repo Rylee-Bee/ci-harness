@@ -21,7 +21,11 @@ name: reusable-project-home
 # nothing about telemetry must see a body it recognises. It does NOT
 # check out the repository — a reporter must stay cheap, and cloning the caller
 # to read one commit trailer would put telemetry ahead of the work it observes.
-# So this run's own trace is used, linked back by vcs.change.id. OpenTelemetry
+# The trailer is read the other way instead: one API read of the head commit's
+# message, with the job token, in the context step below. That read can fail, or
+# find nothing, and then this run's own trace is used and linked back by
+# vcs.change.id — the same honest fallback every other template has, never an
+# invented id. OpenTelemetry
 # observes the estate; it never becomes the estate: a span cannot fail the call.
 
 on:
@@ -134,11 +138,23 @@ jobs:
           OTELSPAN_HEAD_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
           OTELSPAN_CHANGE_ID: ${{ github.event.pull_request.number }}
           OTELSPAN_RUNNER_LABEL: ${{ inputs.runs-on }}
+          # The job token, for the one API read below. It is passed as an
+          # environment variable and never as an argument, so it never reaches
+          # argv — on a self-hosted runner any process of the same user can read
+          # another's command line while it runs. contents:read is all this needs,
+          # and that is the default token permission.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -u
           # No checkout in this job (see the header), so there is no HEAD commit
           # to read an Estate-Task trailer from and no caller tree to read the
-          # helper from: it comes from ci-harness itself.
+          # helper from: the helper comes from ci-harness itself, and the trailer
+          # comes from the API — one read of one commit message, with the job
+          # token. That is what lets this job send the Estate-Task header at all:
+          # without it the reporter would be the one job on the trace that could
+          # never be correlated. It is a read of a commit message, NOT a
+          # checkout: a reporter must stay cheap, and cloning the caller to read
+          # one trailer would put telemetry ahead of the work it observes.
           if curl -fsSL --max-time 15 "$OTELSPAN_HELPER_URL" -o "$OTELSPAN_HELPER"; then
             bash "$OTELSPAN_HELPER" context --env-file "$OTELSPAN_ENV_FILE" || true
           else
