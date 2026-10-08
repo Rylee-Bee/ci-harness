@@ -157,8 +157,9 @@ jobs:
 
   # Green-path witness that cannot rot: a manifest whose pin is generated
   # LIVE from the remote head must read CURRENT. The committed current-pin
-  # fixture above stays honest (it goes red on purpose when the library
-  # moves, until a human re-pins it); this job proves the gate's green
+  # fixture above stays honest (it goes red on purpose when the library's
+  # contracts or schema move, until a human re-pins it; docs-only moves
+  # read CURRENT under its `update: automatic`); this job proves the gate's green
   # verdict tracks the remote rather than a hardcoded constant.
   contract-freshness-live:
     name: contract freshness — live remote sha (expect CURRENT)

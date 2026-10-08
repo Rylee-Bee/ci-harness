@@ -2,7 +2,7 @@ name: reusable-contract-freshness
 
 # ci-harness — Play-Nice contract freshness gate (workflow_call).
 #
-# Harness-owned mechanics: shallow-clone the authoritative contract source
+# Harness-owned mechanics: blobless-clone the authoritative contract source
 # (Rylee-Bee/play-nice-contracts) over https, run its stdlib-only
 # `contractctl freshness --manifest <caller manifest> --json`, and
 # propagate the tool's exit code as the job's exit code. Repo-owned
@@ -18,9 +18,15 @@ name: reusable-contract-freshness
 # compares against the remote head. Pinning the clone to anything but the
 # default-branch tip would force the verdict away from CURRENT forever.
 # The revision under test is always the CONSUMER'S manifest pin, never
-# this plumbing. Note a `--depth 1` clone cannot prove fast-forward
-# ancestry for old commits, so a stale pin reports DIVERGED rather than
-# BEHIND; both are nonzero, which is the guarantee consumers depend on.
+# this plumbing. The clone is blobless (`--filter=blob:none`): all commits
+# and trees, file contents for the tip only, about the size of a `--depth 1`
+# clone. Full history lets the tool PROVE fast-forward ancestry, so a pin
+# that is merely behind reads BEHIND (a `--depth 1` clone could only say
+# DIVERGED), and a manifest that declares `freshness.update: automatic` gets
+# the tool's equivalence rule: an ancestor pin whose contracts/ and schema/
+# are byte-identical to the remote reads CURRENT. A docs-only library move
+# then stops turning consumers red; any contract change still reads BEHIND
+# (exit 1). The pin itself never moves here.
 #
 # Honesty line: this template never syncs a pin. Pin movement belongs to
 # the consumer: by hand, or by a pin robot that opens a reviewed pin PR
@@ -87,9 +93,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Shallow-clone contract source (https, no credentials)
+      - name: Blobless-clone contract source (https, no credentials)
         run: >-
-          git clone --depth 1
+          git clone --filter=blob:none
           https://github.com/Rylee-Bee/play-nice-contracts.git
           "${{ runner.temp }}/play-nice-contracts"
       - name: Contract freshness gate (fail closed)

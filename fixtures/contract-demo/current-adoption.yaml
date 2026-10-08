@@ -1,11 +1,15 @@
 # ci-harness self-smoke fixture — CURRENT adoption pin (must pass today).
 #
-# Pinned to the live default-branch head of Rylee-Bee/play-nice-contracts
-# at the time of writing. Unlike the stale probe, this fixture is a
-# tripwire: when the library advances, `contract freshness — current pin`
-# goes red until this file is re-pinned. The Play-Nice pin robot
-# (play-nice-contracts tools/pin-sync) follows it like any adopter and
-# opens the one-line `source.revision` PR itself. The parallel
+# Declares `update: automatic`, the policy play-nice-contracts uses for its
+# own adoption: while the pin is a provable ancestor of the library's main
+# and contracts/ and schema/ are byte-identical to it, the gate reads
+# CURRENT (the equivalence rule). Docs-only library moves therefore leave
+# this green. When a contract or schema file changes upstream, `contract
+# freshness — current pin` goes red until this file is re-pinned: still a
+# human decision; the Play-Nice pin robot (play-nice-contracts
+# tools/pin-sync) follows it like any adopter and opens the one-line PR.
+# Before 2026-10-08 every library move turned ci-harness
+# main red (eight re-pins in two weeks, most for docs). The parallel
 # contract-freshness-live job generates its pin at run time and never
 # rots; together the two prove the green verdict tracks the remote rather
 # than a hardcoded constant.
@@ -14,5 +18,10 @@ project: ci-harness-fixture-current
 source:
   repository: Rylee-Bee/play-nice-contracts
   revision: b43b729f9799de33daa5513bbce46dd352127398   # re-pinned 2026-10-08 with Rylee's OK: one docs commit (BACKLOG.md, play-nice-contracts#63); contracts/ and schema/ unchanged since d0bb0b2.
+freshness:
+  policy: require-current
+  ref: main
+  update: automatic
+
 always:
   - assume-unknown

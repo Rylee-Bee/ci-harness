@@ -136,8 +136,11 @@ permanently stale fixture must exit nonzero — proven by an inversion job
 because GitHub forbids `continue-on-error` on `uses:` jobs) plus an
 assertion job on the probe's propagated outputs; and a manifest generated
 live from `git ls-remote` at run time must read CURRENT, so the green-path
-witness never rots when the library moves. When upstream does advance, the
-committed current-pin fixture goes red on purpose until a human re-pins it.
+witness never rots when the library moves. The committed current-pin fixture
+declares `update: automatic`, so a docs-only upstream move leaves it CURRENT
+(the tool's equivalence rule, provable because the template's clone is
+blobless with full history); when upstream contracts or schema change, it
+goes red on purpose until a human re-pins it.
 
 ## Permissions
 
