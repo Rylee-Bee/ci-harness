@@ -119,7 +119,7 @@ jobs:
               if problems:
                   print("\n".join(problems), file=sys.stderr)
                   raise SystemExit(1)
-              print(f"OK {path}: every job emits a pipeline span and a job span, neither can fail it")
+              print(f"OK {path}: every job emits a pipeline-role span and a job span, neither can fail it")
           PY
       - name: Run one template job's telemetry steps against a live receiver
         run: |
@@ -207,6 +207,14 @@ jobs:
           assert set(by_name) == {"ci.pipeline.run", "ci.job.run"}, f"got {sorted(by_name)}"
           pipeline, job = by_name["ci.pipeline.run"], by_name["ci.job.run"]
 
+          # The pipeline-role span carries the run's identity but the JOB's
+          # interval: it starts where this job's context step ran, because no
+          # job can see the pipeline's own extent. Asserted so the README's
+          # "read a duration off it as a job's slice" cannot go quietly false.
+          assert pipeline["startTimeUnixNano"] == job["startTimeUnixNano"], (
+              pipeline["startTimeUnixNano"], job["startTimeUnixNano"]
+          )
+
           # The PR joined the mission task's trace, computed from the ids alone.
           assert pipeline["traceId"] == job["traceId"] == want_trace, pipeline["traceId"]
           assert pipeline["parentSpanId"] == want_root, pipeline.get("parentSpanId")
@@ -238,7 +246,7 @@ jobs:
               assert banned not in blob, f"span body leaked {banned!r}"
 
           print(f"OK: the template's own steps joined trace {want_trace[:12]}… "
-                f"and sent a pipeline span and a job span carrying the standard conventions")
+                f"and sent a pipeline-role span and a job span carrying the standard conventions")
           PY
 
   python:

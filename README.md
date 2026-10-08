@@ -151,6 +151,20 @@ becomes the estate.** The GitHub check is still the gate — no step, script or
 backend reads these spans to decide whether work passed, approved, or may land,
 and a span cannot fail a job.
 
+**What the pipeline span's interval means.** Its *name* and its *attributes*
+(`cicd.pipeline.name`, `cicd.pipeline.run.id`, `cicd.pipeline.result`) are the
+run's own and are correct and identical across every job of a run. Its
+*timestamps are not the pipeline's*: they are this job's, from the telemetry
+context step to the closing step, so a run with five jobs produces five
+pipeline-role spans and each one's duration is one job's duration. Read a
+duration off it as a job's slice, not a run's. This is stated rather than
+worked around because no job can observe when the pipeline started or when its
+last job ended — widening the span would mean guessing — and because renaming it
+away from `ci.pipeline.run` would invent an estate-specific name for something
+the CI/CD conventions already name, which #19 rules out first. The job span
+under it carries the run's `cicd.pipeline.*` identity plus this job's
+`cicd.pipeline.task.*`.
+
 What a run emits, using OpenTelemetry's own conventions rather than
 estate-specific names:
 
