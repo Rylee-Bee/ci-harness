@@ -442,6 +442,28 @@ cmd_context() {
   fi
 
   # One trace per job; the task run id is derived, never a random collision.
+  #
+  # WHAT THE PIPELINE-ROLE SPAN'S INTERVAL MEANS — read this before trusting a
+  # duration off it. Every job of a run emits its own pipeline-role span, and
+  # its timestamps are this job's: `otel_start_ns` is the context step, which is
+  # the first thing the job does, and the closing `ci-emit` runs at the job's
+  # end. So that span's interval is THE JOB'S, not the pipeline's, and a run
+  # with five jobs produces five of them.
+  #
+  # The *identity* on it is not approximate: cicd.pipeline.name, .run.id and
+  # .result are the run's own, correct and identical across its jobs. Only the
+  # extent is this job's slice. That is stated rather than hidden, and the
+  # self-test asserts it (check: "the pipeline-role span's interval is the job's
+  # interval, not the pipeline's"), so this paragraph cannot quietly go stale.
+  #
+  # It cannot be made otherwise from in here: no job can observe when the
+  # pipeline started or when its last job ended, so there is no honest way to
+  # widen the span, and widening it to a guess would be worse than naming what it
+  # is. The obvious alternative was to rename the span away from
+  # `ci.pipeline.run` to something that says "job" — but that invents an
+  # estate-specific name for a thing the CI/CD conventions already name, which
+  # ci-harness #19 rules out ahead of the alternative. So: standard name,
+  # documented extent.
   pipeline_span=$(nonzero "$(sha256_hex "cicd-pipeline|${run_id}|${attempt}|${job_key}")")
   pipeline_span="${pipeline_span:0:16}"
   task_run=$(sha256_hex "cicd-task-run|${run_id}|${attempt}|${job_key}")
@@ -552,6 +574,10 @@ cmd_ci_emit() {
 
   local span_id parent_id span_name
   [ "$child" -eq 1 ] && [ -z "$span_override" ] && span_override="$(nonzero "$(random_hex 8)")"
+  # `--role pipeline` is the parent span this job hangs its task span under. Its
+  # name, its attributes and its span id are the standard, per-run ones; its
+  # start and end are this job's, because that is the only interval a job can
+  # see. See the long note where the span id is derived.
   if [ "$role" = "pipeline" ]; then
     span_name="${name:-ci.pipeline.run}"
     span_id="${span_override:-${otel_pipeline_span_id:-}}"
@@ -972,6 +998,25 @@ s=json.loads(sys.stdin.read())["body"]["resourceSpans"][0]["scopeSpans"][0]["spa
 print(" ".join(a["key"]+"="+list(a["value"].values())[0] for a in s["attributes"] if a["key"].startswith("cicd.pipeline.task")))')
   assert_eq "cicd.pipeline.task.name=reusable-python:test cicd.pipeline.task.run.id=${otel_task_run_id} cicd.pipeline.task.run.result=success" "$got" \
     "the job span carries cicd.pipeline.task.name, task.run.id and task.run.result"
+
+  # The documented extent, checked rather than asserted in prose. The
+  # pipeline-role span is named for the pipeline and carries the pipeline's own
+  # identity, so a reader will take its duration to mean the pipeline. It does
+  # not: it starts when this job's context step runs and ends when this job
+  # closes, so its interval is the JOB's. cmd_context says so in as many words;
+  # this is what keeps that sentence true if the derivation ever changes.
+  got=$(printf '%s' "$first" | python3 -c '
+import json,sys
+s=json.loads(sys.stdin.read())["body"]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+print(s["name"], s["startTimeUnixNano"])')
+  assert_eq "ci.pipeline.run ${otel_start_ns}" "$got" \
+    "the pipeline-role span's interval is the job's interval, not the pipeline's"
+  got=$(printf '%s' "$second" | python3 -c '
+import json,sys
+s=json.loads(sys.stdin.read())["body"]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+print(s["name"], s["startTimeUnixNano"])')
+  assert_eq "ci.job.run ${otel_start_ns}" "$got" \
+    "the job span starts where the job starts — the pipeline span cannot claim otherwise"
 
   printf '\n--- one real OTLP/HTTP body this self-test captured ---\n'
   printf '%s' "$second" | python3 -c '
