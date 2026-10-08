@@ -142,6 +142,83 @@ declares `update: automatic`, so a docs-only upstream move leaves it CURRENT
 blobless with full history); when upstream contracts or schema change, it
 goes red on purpose until a human re-pins it.
 
+## Telemetry
+
+Every template emits a **pipeline span and a job span** per job through
+`scripts/otel-span.sh` (ci-harness #19; the contract it follows is homelab's
+`docs/observability/TELEMETRY-CONTRACT.md`, homelab #229). **OpenTelemetry observes the estate; it never
+becomes the estate.** The GitHub check is still the gate — no step, script or
+backend reads these spans to decide whether work passed, approved, or may land,
+and a span cannot fail a job.
+
+What a run emits, using OpenTelemetry's own conventions rather than
+estate-specific names:
+
+| Attribute | On |
+|---|---|
+| `cicd.pipeline.name`, `cicd.pipeline.run.id`, `cicd.pipeline.result`, `cicd.worker.name` | every span |
+| `cicd.pipeline.task.name`, `cicd.pipeline.task.run.id`, `cicd.pipeline.task.run.result` | job span |
+| `vcs.repository.name`, `vcs.ref.head.name`, `vcs.ref.head.revision`, `vcs.change.id` | every span |
+| `estate.host.class`, `estate.actor.kind`, `estate.mission.id`, `estate.task.id` | every span |
+| `service.name`, `service.namespace=estate` (resource), `http.*`, `url.path` | resource / the Project Home call |
+
+Turning it on is one repository variable, read by every template:
+
+| Variable | Meaning |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | base URL of the Collector; `/v1/traces` is appended |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | per-signal override, wins over the base URL |
+| `OTEL_SERVICE_NAME` | defaults to `ci-harness` |
+| `ESTATE_HOST_CLASS` | refines the label-derived host class — it never overrides a runner label that says `github-hosted`, because one repository-variable edit must not be able to point a hosted runner at a LAN Collector it cannot reach |
+
+These are the **standard** OTEL environment variables, not an estate-specific
+discovery mechanism. There is deliberately **no `workflow_call` input** for the
+endpoint: a new input costs a self-smoke job per template (AGENTS.md) for one
+string, and this repo's own cost discipline says fold jobs that prove the same
+thing. The trade-off is that a consumer cannot point one call at a different
+Collector — which matches the estate, where there is one Collector, and keeps
+rollback to a single unset.
+
+**Unset endpoint means off**, and the helper then does nothing differently: one
+POST per span, a 2-second timeout, no retries, every error swallowed, and a
+circuit breaker so an unreachable Collector costs one timeout per job rather
+than one per span. Both telemetry steps are `continue-on-error: true`, and the
+closing step is `if: always()`, so a failed or skipped job is still recorded
+honestly. A `github-hosted` runner cannot reach the LAN Collector, so it emits
+nothing at all and says so in the step summary rather than posting a span that
+cannot arrive.
+
+**Joining a mission's trace.** A PR a mission lands carries
+`Estate-Task: <mission_id>/<task_id>` on its commits; the context step reads it
+off HEAD and derives the trace from the ids alone
+(`sha256("estate-task|<mission>|<task>")`, first 32 hex) with no shared state.
+A PR without the trailer gets its own trace, linked back by `vcs.change.id`.
+The Project Home reporter sends the resulting `traceparent` on its `/api/ci`
+call, which is how Project Home's own spans land in the same trace — and the
+claim, heartbeat and finish calls carry the two ids as an `Estate-Task` request
+header, read from that same context, so Project Home's `ci.task.*` spans are
+still joinable after the trace is gone: a mission runs for days and no one trace
+spans it. That header is the **only** interface: it is the one Project Home
+already accepts (`app/projecthome/telemetry.py`, `ESTATE_TASK_HEADER`), and the
+reporter deliberately grows no `mission_id` / `mission_task_id` body pair for
+existing callers to learn — a CI consumer that knows nothing about telemetry
+must see a body it recognises. With no trailer **no header is sent** — no empty
+value, no repo-name or run-id stand-in — and a notice, which belongs to no task,
+never carries one either.
+
+Two self-smoke jobs prove this without a Collector: `otel-selftest` runs
+`scripts/otel-span.sh --self-test` (a throwaway OTLP receiver on 127.0.0.1,
+asserting the bodies it captures), and `otel-template-wiring` checks that every
+template still carries the pair and runs one template's two steps end to end
+against a live receiver.
+
+Because a reusable workflow's `github` context is the **caller's** repository,
+`scripts/otel-span.sh` is not present after a template's own `checkout`. Each
+template prefers the checked-out tree (self-smoke, where ci-harness *is* the
+caller) and otherwise fetches it from ci-harness `@main` — the same reference
+policy the templates themselves are adopted under. See
+[pins/ACTIONS.md](pins/ACTIONS.md).
+
 ## Permissions
 
 Caller token permissions flow down and can only be **kept or downgraded**
