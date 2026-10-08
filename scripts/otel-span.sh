@@ -115,12 +115,59 @@ parse_traceparent() {
 }
 
 # The Estate-Task trailer (contract §2) rides on the commits of a PR a mission lands.
-task_from_git() {
-  local ref="${1:-HEAD}" msg line
-  msg=$(git log -1 --format=%B "$ref" 2>/dev/null) || return 0
-  line=$(printf '%s\n' "$msg" | tr -d '\r' | grep -E '^[[:space:]]*Estate-Task:[[:space:]]*[A-Za-z0-9._-]+/[A-Za-z0-9._-]+[[:space:]]*$' | head -n1) || return 0
+# The grammar lives here, once, because both readers below go through it: a value
+# found over the API has exactly as much right to become a trace id as one found
+# in the local object store, so the two must not be able to drift apart.
+trailer_from_message() {
+  local line
+  line=$(printf '%s\n' "${1-}" | tr -d '\r' \
+    | grep -E '^[[:space:]]*Estate-Task:[[:space:]]*[A-Za-z0-9._-]+/[A-Za-z0-9._-]+[[:space:]]*$' | head -n1) || return 0
   line="${line#"${line%%[![:space:]]*}"}"
   printf '%s' "${line#Estate-Task:}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
+}
+
+task_from_git() {
+  local ref="${1:-HEAD}" msg
+  msg=$(git log -1 --format=%B "$ref" 2>/dev/null) || return 0
+  trailer_from_message "$msg"
+}
+
+# The same trailer, for a job that has no checkout to read it out of. The Project
+# Home reporter is exactly that job, and the finding is real: without this it can
+# never see an Estate-Task trailer, so its `/api/ci` calls go out uncorrelated
+# and the reporter — the one job whose entire reason for existing on this trace is
+# the correlation — is the one job that never gets it.
+#
+# This is a *read of one commit message through the job token*, not a checkout:
+# a reporter must stay cheap, and cloning the caller to read one trailer would
+# put telemetry ahead of the work it observes. Nothing else about the request
+# changes.
+#
+# Guarded four ways, and each guard is a decision rather than paranoia:
+#   - a `.git` this could read is used first, so the API is never asked a
+#     question git has already answered (an untrailered run costs no API call);
+#   - the sha must be hex before it becomes part of a URL path;
+#   - `gh` and a token must both exist, so this is a no-op on a runner without
+#     either — never an error, because telemetry must not fail a job;
+#   - the token arrives in the environment (GH_TOKEN), never in argv, where any
+#     process of the same user on a self-hosted runner could read it.
+task_from_api() {
+  local repo="${GITHUB_REPOSITORY:-}" sha="${1:-${OTELSPAN_HEAD_REVISION:-}}" msg token
+  [ -n "$repo" ] && [ -n "$sha" ] || return 0
+  [[ "$sha" =~ ^[0-9a-fA-F]{7,40}$ ]] || return 0
+  command -v gh >/dev/null 2>&1 || return 0
+  token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  [ -n "$token" ] || return 0
+  msg=$(GH_TOKEN="$token" gh api "repos/${repo}/commits/${sha}" --jq .commit.message 2>/dev/null) || return 0
+  trailer_from_message "$msg"
+}
+
+# Is there a local object store this job could have read the trailer from? A
+# reusable workflow's checkout happens in the *caller's* tree, so for a template
+# with no checkout of its own the answer is no, and the API is the only road in.
+has_git_repo() {
+  local d="${GITHUB_WORKSPACE:-$PWD}"
+  git -C "$d" rev-parse --git-dir >/dev/null 2>&1
 }
 
 # estate.host.class (contract §3). Coarse by design: a runner *label*, never a
@@ -366,9 +413,20 @@ cmd_context() {
 
   # A PR a mission lands carries Estate-Task: <mission_id>/<task_id> on its HEAD
   # commit. Without one this run gets its own trace, linked by vcs.change.id.
+  #
+  # Two readers, in one order: the local object store when this job has one, and
+  # the API when it does not. A job with no checkout has no HEAD commit message
+  # to read, and asking the API only in that case keeps the common path free —
+  # an untrailered run in a checked-out template never spends an API call, because
+  # git already gave the definitive answer.
   [ -n "$task" ] || task=$(trim "${OTELSPAN_TASK:-}")
-  if [ -z "$task" ] && [ "${OTELSPAN_READ_GIT:-1}" != "0" ]; then
-    task=$(task_from_git "${OTELSPAN_GIT_REF:-HEAD}")
+  if [ -z "$task" ]; then
+    if [ "${OTELSPAN_READ_GIT:-1}" != "0" ]; then
+      task=$(task_from_git "${OTELSPAN_GIT_REF:-HEAD}")
+    fi
+    if [ -z "$task" ] && ! has_git_repo; then
+      task=$(task_from_api)
+    fi
   fi
 
   local mission="" tid="" trace parent pipeline_span task_run span_id
@@ -598,6 +656,10 @@ otel-span.sh — the estate OpenTelemetry span emitter (bash + curl, standard li
   task-traceparent <mission> <task>
   parse-traceparent <traceparent>       prints "<trace-id> <span-id>", exit 1 if malformed
   task-from-git [ref]                   prints the Estate-Task trailer, or nothing
+  task-from-api [sha]                   the same trailer, read from the head commit
+                             through the API with the job token — for a job with no
+                             checkout to read it out of. Nothing without gh, a token
+                             and a hex sha.
   detect-host-class <runner-label>      dev-vm | bazzite | dockerhost | stack-vm | github-hosted | unknown
 
 On only when OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT is set
@@ -625,6 +687,7 @@ main() {
       printf '%s %s\n' "$PT_TRACE" "$PT_SPAN"
       ;;
     task-from-git) task_from_git "${1:-HEAD}"; printf '\n' ;;
+    task-from-api) task_from_api "${1:-}"; printf '\n' ;;
     detect-host-class) detect_host_class "${1-}"; printf '\n' ;;
     -h | --help | help) usage ;;
     "") usage; exit 2 ;;
@@ -947,6 +1010,136 @@ Estate-Task: m9/T7"
     "task-from-git reads the Estate-Task trailer off the HEAD commit"
   git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "ci: an ordinary commit with no trailer"
   assert_eq "" "$(cd "$repo" && bash "$SELF" task-from-git)" "a commit with no trailer yields no task"
+
+  # --- 6b. the same trailer for a job with NO checkout. The Project Home
+  # reporter has no checkout on purpose, so before this it could never see a
+  # trailer: the one job whose whole reason for being on the trace is the
+  # correlation was the one job that never got it. It now reads the head
+  # commit's message through the API with the job token.
+  #
+  # `gh` is stood in for by a script on PATH, so this proves the code path and
+  # not the network: nothing leaves the machine and the token is a literal.
+  local fakebin="$tmp/fakebin" nocheckout="$tmp/no-checkout"
+  local wf2
+  wf2="$(cd -- "$(dirname -- "$SELF")" && pwd)/../.github/workflows/reusable-project-home.yml"
+  mkdir -p "$fakebin" "$nocheckout"
+  cat >"$fakebin/gh" <<'FAKE_GH'
+#!/bin/sh
+# Stand-in for the GitHub CLI. Records how it was called, then answers with one
+# commit message. Real gh would read GH_TOKEN from the environment too; the
+# recording is what lets a check below prove the token never reached argv.
+printf '%s\n' "$*" >"$GH_FAKE_ARGS"
+printf '%s\n' "$GH_TOKEN" >"$GH_FAKE_TOKEN"
+[ -n "${GH_FAKE_FAIL:-}" ] && exit 1
+if [ "${GH_FAKE_TRAILER:-1}" = "1" ]; then
+  printf 'ci: land the thing\n\nEstate-Task: m9/T7\n'
+else
+  printf 'ci: an ordinary commit with no trailer\n'
+fi
+FAKE_GH
+  chmod +x "$fakebin/gh"
+
+  local api_sha api_mission api_task api_header
+  api_sha=$(printf 'd%.0s' $(seq 40))
+  # The run happens in a directory with no .git in it, and says so: that is the
+  # condition the fix exists for, so the test has to hold it rather than assume it.
+  assert_eq "1" "$(cd "$nocheckout" && git rev-parse --git-dir >/dev/null 2>&1; [ $? -ne 0 ] && echo 1 || echo 0)" \
+    "the API path is exercised from a directory that is not a git repository — no checkout"
+
+  ( cd "$nocheckout" && PATH="$fakebin:$PATH" GITHUB_WORKSPACE="$nocheckout" \
+      GITHUB_REPOSITORY="Rylee-Bee/vefr" GH_TOKEN="ghs_notarealtoken" \
+      GH_FAKE_ARGS="$tmp/gh-args" GH_FAKE_TOKEN="$tmp/gh-token" \
+      OTELSPAN_HEAD_REVISION="$api_sha" OTELSPAN_JOB_KEY="reusable-project-home:report" \
+      OTELSPAN_PIPELINE_NAME="validate" OTELSPAN_RUN_ID="7" OTELSPAN_RUN_ATTEMPT="1" \
+      OTELSPAN_RUNNER_LABEL="bazzite" OTELSPAN_READ_GIT=0 \
+      bash "$SELF" context --env-file "$tmp/ctx-api.env" >/dev/null )
+  api_mission=$(grep '^otel_mission_id=' "$tmp/ctx-api.env" | cut -d= -f2- | tr -d "'")
+  api_task=$(grep '^otel_task_id=' "$tmp/ctx-api.env" | cut -d= -f2- | tr -d "'")
+  assert_eq "m9 T7" "$api_mission $api_task" \
+    "with no checkout, the Estate-Task trailer is read through the API and the ids are found"
+  assert_eq "$(printf 'estate-task|m9|T7' | sha256sum | cut -d' ' -f1 | cut -c1-32)" \
+    "$(grep '^otel_trace_id=' "$tmp/ctx-api.env" | cut -d= -f2- | tr -d "'")" \
+    "an API-read trailer joins the same mission trace a git-read one does — the recipe is the ids alone"
+
+  # The finding in one assertion: what the reporter actually puts on the wire.
+  api_header=$(ph_header "$tmp/ctx-api.env")
+  assert_eq "m9/T7" "$api_header" \
+    "so the reporter sends Estate-Task: <mission>/<task> with no checkout to read it from"
+
+  # The API call is exactly one commit message, and the token is not in argv.
+  assert_eq "api repos/Rylee-Bee/vefr/commits/${api_sha} --jq .commit.message" \
+    "$(cat "$tmp/gh-args" 2>/dev/null)" \
+    "the API read is one head commit message, and nothing else"
+  assert_eq "ghs_notarealtoken" "$(cat "$tmp/gh-token" 2>/dev/null)" \
+    "the job token reaches gh through the environment"
+  if grep -q "ghs_notarealtoken" "$tmp/gh-args" 2>/dev/null; then
+    nope "the job token never reaches argv" "argv [$(cat "$tmp/gh-args")]"
+  else
+    ok "the job token never reaches argv, where a self-hosted runner's other processes could read it"
+  fi
+
+  # The negative cases, because a fallback that guesses would be worse than none.
+  ( cd "$nocheckout" && PATH="$fakebin:$PATH" GITHUB_WORKSPACE="$nocheckout" \
+      GITHUB_REPOSITORY="Rylee-Bee/vefr" GH_TOKEN="ghs_notarealtoken" \
+      GH_FAKE_ARGS="$tmp/gh-args2" GH_FAKE_TOKEN="$tmp/gh-token2" GH_FAKE_TRAILER=0 \
+      OTELSPAN_HEAD_REVISION="$api_sha" OTELSPAN_RUNNER_LABEL="bazzite" OTELSPAN_READ_GIT=0 \
+      bash "$SELF" context --env-file "$tmp/ctx-api-bare.env" >/dev/null )
+  assert_eq "2" "$(grep -cE "^otel_(mission|task)_id=''$" "$tmp/ctx-api-bare.env")" \
+    "an untrailered commit over the API yields no mission and no task id — no invented pair"
+  assert_eq "" "$(ph_header "$tmp/ctx-api-bare.env")" \
+    "an untrailered API read sends no Estate-Task header at all"
+
+  ( cd "$nocheckout" && PATH="$fakebin:$PATH" GITHUB_WORKSPACE="$nocheckout" \
+      GITHUB_REPOSITORY="Rylee-Bee/vefr" \
+      GH_FAKE_ARGS="$tmp/gh-args3" GH_FAKE_TOKEN="$tmp/gh-token3" \
+      OTELSPAN_HEAD_REVISION="$api_sha" OTELSPAN_RUNNER_LABEL="bazzite" OTELSPAN_READ_GIT=0 \
+      bash "$SELF" context --env-file "$tmp/ctx-api-notoken.env" >/dev/null )
+  if [ -f "$tmp/gh-args3" ]; then
+    nope "with no token the API is not called at all"
+  else
+    ok "with no token the API is not called at all — the fallback cannot fail the job"
+  fi
+
+  ( cd "$nocheckout" && PATH="$fakebin:$PATH" GITHUB_WORKSPACE="$nocheckout" \
+      GITHUB_REPOSITORY="Rylee-Bee/vefr" GH_TOKEN="ghs_notarealtoken" \
+      GH_FAKE_ARGS="$tmp/gh-args4" GH_FAKE_TOKEN="$tmp/gh-token4" GH_FAKE_FAIL=1 \
+      OTELSPAN_HEAD_REVISION="$api_sha" OTELSPAN_RUNNER_LABEL="bazzite" OTELSPAN_READ_GIT=0 \
+      bash "$SELF" context --env-file "$tmp/ctx-api-fail.env" >/dev/null )
+  assert_eq "0" "$?" "a failing API read leaves the context command at exit 0 — telemetry never fails CI"
+
+  # A sha is interpolated into a URL path, so only hex is ever allowed there.
+  ( cd "$nocheckout" && PATH="$fakebin:$PATH" GITHUB_WORKSPACE="$nocheckout" \
+      GITHUB_REPOSITORY="Rylee-Bee/vefr" GH_TOKEN="ghs_notarealtoken" \
+      GH_FAKE_ARGS="$tmp/gh-args5" GH_FAKE_TOKEN="$tmp/gh-token5" \
+      OTELSPAN_HEAD_REVISION="main" OTELSPAN_RUNNER_LABEL="bazzite" OTELSPAN_READ_GIT=0 \
+      bash "$SELF" context --env-file "$tmp/ctx-api-badsha.env" >/dev/null )
+  if [ -f "$tmp/gh-args5" ]; then
+    nope "a non-hex head sha never reaches the API path"
+  else
+    ok "a non-hex head sha never reaches the API path — nothing odd is interpolated into a URL"
+  fi
+
+  # A checked-out job does not pay for the API. The fixture repo's HEAD carries
+  # no trailer, so git has already given the definitive answer — "no trailer" —
+  # and the API must not be asked the same question a second time.
+  rm -f "$tmp/gh-args6"
+  ( cd "$repo" && PATH="$fakebin:$PATH" GITHUB_WORKSPACE="$repo" \
+      GITHUB_REPOSITORY="Rylee-Bee/vefr" GH_TOKEN="ghs_notarealtoken" \
+      GH_FAKE_ARGS="$tmp/gh-args6" GH_FAKE_TOKEN="$tmp/gh-token6" \
+      OTELSPAN_HEAD_REVISION="$api_sha" OTELSPAN_RUNNER_LABEL="bazzite" \
+      bash "$SELF" context --env-file "$tmp/ctx-git-wins.env" >/dev/null )
+  if [ -f "$tmp/gh-args6" ]; then
+    nope "a job with a checkout spends no API call — git already answered" "argv [$(cat "$tmp/gh-args6")]"
+  else
+    ok "a job with a checkout spends no API call — git already answered, so the fallback stays off"
+  fi
+
+  # And the workflow still has no checkout to read it from — if somebody adds
+  # one later, the API path is no longer what runs, and this says so.
+  assert_eq "0" "$(grep -c 'actions/checkout' "$wf2" 2>/dev/null || true)" \
+    "reusable-project-home.yml still has no checkout: the API read is what makes the trailer available"
+  assert_eq "1" "$(grep -c 'GH_TOKEN: ${{ github.token }}' "$wf2" 2>/dev/null || true)" \
+    "the reporter passes the job token to the context step, for that one API read"
 
   OTELSPAN_JOB_KEY="reusable-node:build" OTELSPAN_PIPELINE_NAME="validate" OTELSPAN_RUN_ID="7" \
     OTELSPAN_RUN_ATTEMPT="1" OTELSPAN_REPOSITORY="Rylee-Bee/vefr" OTELSPAN_REF_HEAD="314/merge" \
