@@ -6,9 +6,9 @@
 # and an assertion job proves the tool exited nonzero. This probe MUST
 # go red; if it ever passes, the fail-closed gate is broken.
 #
-# With the template's --depth 1 clone, old objects are absent so
-# fast-forward ancestry cannot be proven and the verdict is DIVERGED
-# rather than BEHIND — nonzero either way, which is the guarantee.
+# `update: review`, so the equivalence rule never applies: the verdict is
+# BEHIND (or DIVERGED if upstream history ever orphans the pin) — nonzero
+# either way, which is the guarantee.
 schema: play-nice/adoption-v1
 project: ci-harness-contract-demo-stale-probe
 source:
