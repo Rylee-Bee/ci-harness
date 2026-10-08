@@ -9,6 +9,20 @@ name: reusable-project-home
 # Real callers provide both secrets. The self-smoke escape hatch is accepted
 # only when the caller repository itself is Rylee-Bee/ci-harness; it validates
 # request construction without touching the network.
+#
+# Telemetry: this job carries a `cicd.pipeline.task.*` span and hands Project
+# Home a W3C `traceparent` on its /api/ci call, which is the whole point of the
+# reporter being instrumented (homelab docs/observability/TELEMETRY-CONTRACT.md
+# §2 and §6). When that trace context also knows the mission and task ids, the
+# claim, heartbeat and finish calls carry them in the `Estate-Task` request
+# header — the header Project Home already reads — so its own ci.task.* spans
+# are joinable after the trace is gone: a mission runs for days and no single
+# trace spans it. The request bodies are untouched; a CI consumer that knows
+# nothing about telemetry must see a body it recognises. It does NOT
+# check out the repository — a reporter must stay cheap, and cloning the caller
+# to read one commit trailer would put telemetry ahead of the work it observes.
+# So this run's own trace is used, linked back by vcs.change.id. OpenTelemetry
+# observes the estate; it never becomes the estate: a span cannot fail the call.
 
 on:
   workflow_call:
@@ -93,6 +107,45 @@ jobs:
     name: Project Home ${{ inputs.action }}
     runs-on: ${{ inputs.runs-on }}
     steps:
+      # Telemetry is observation, never authority: this step cannot fail the job,
+      # and the helper exits 0 even when the Collector is unreachable. The
+      # endpoint arrives through the standard OTEL environment variables read
+      # from repository variables — an unset variable is simply empty, which
+      # means off. No `workflow_call` input is added for it: that would cost a
+      # self-smoke job per template for one string, and would be the
+      # estate-specific discovery the contract rules out.
+      - name: OpenTelemetry context
+        continue-on-error: true
+        shell: bash
+        env:
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT }}
+          OTEL_SERVICE_NAME: ${{ vars.OTEL_SERVICE_NAME }}
+          ESTATE_HOST_CLASS: ${{ vars.ESTATE_HOST_CLASS }}
+          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/Rylee-Bee/ci-harness/main/scripts/otel-span.sh
+          OTELSPAN_HELPER: ${{ runner.temp }}/otel-span.sh
+          OTELSPAN_ENV_FILE: ${{ runner.temp }}/otel-ctx.env
+          OTELSPAN_JOB_KEY: reusable-project-home:report
+          OTELSPAN_PIPELINE_NAME: ${{ github.workflow }}
+          OTELSPAN_RUN_ID: ${{ github.run_id }}
+          OTELSPAN_RUN_ATTEMPT: ${{ github.run_attempt }}
+          OTELSPAN_REPOSITORY: ${{ github.repository }}
+          OTELSPAN_REF_HEAD: ${{ github.head_ref || github.ref_name }}
+          OTELSPAN_HEAD_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          OTELSPAN_CHANGE_ID: ${{ github.event.pull_request.number }}
+          OTELSPAN_RUNNER_LABEL: ${{ inputs.runs-on }}
+        run: |
+          set -u
+          # No checkout in this job (see the header), so there is no HEAD commit
+          # to read an Estate-Task trailer from and no caller tree to read the
+          # helper from: it comes from ci-harness itself.
+          if curl -fsSL --max-time 15 "$OTELSPAN_HELPER_URL" -o "$OTELSPAN_HELPER"; then
+            bash "$OTELSPAN_HELPER" context --env-file "$OTELSPAN_ENV_FILE" || true
+          else
+            echo "::notice::otel: span helper unavailable; telemetry stays off for this job"
+            rm -f "$OTELSPAN_HELPER"
+          fi
+
       - name: Build and send bounded Project Home request
         shell: bash
         env:
@@ -110,13 +163,54 @@ jobs:
           PH_SELF_SMOKE: ${{ inputs.self-smoke && '1' || '0' }}
           PH_URL: ${{ secrets.project-home-url }}
           PH_TOKEN: ${{ secrets.project-home-token }}
+          OTELSPAN_HELPER: ${{ runner.temp }}/otel-span.sh
+          OTELSPAN_ENV_FILE: ${{ runner.temp }}/otel-ctx.env
         run: |
           set -euo pipefail
+
+          # One trace context, computed once for the whole step: the same span id
+          # is what goes out as `traceparent` and what the job span is recorded
+          # under, so Project Home's own spans land in this run's trace. Four
+          # separate steps would have meant four contexts and four chances to
+          # disagree with each other.
+          otel_traceparent=""
+          otel_job_span=""
+          if [ -s "${OTELSPAN_HELPER:-}" ] && [ -s "${OTELSPAN_ENV_FILE:-}" ]; then
+            otel_traceparent=$(sed -n "s/^otel_traceparent='\(.*\)'\$/\1/p" "$OTELSPAN_ENV_FILE")
+            otel_job_span=$(sed -n "s/^otel_span_id='\(.*\)'\$/\1/p" "$OTELSPAN_ENV_FILE")
+          fi
+
+          # Every span emission is guarded and cannot fail this step: GitHub
+          # checks remain GitHub checks, and OTLP failure must never fail CI.
+          #
+          # The `github-hosted` guard is the helper's own `ci-emit` guard, in the
+          # same form and reading the same field: a GitHub-hosted runner cannot
+          # reach the LAN Collector, so this step stays quiet and says so in the
+          # step summary rather than spending a two-second dial on a span that
+          # cannot arrive. Missing telemetry is UNKNOWN, not a failure.
+          otel() { # $1 role, $2 result; remaining args are forwarded to ci-emit
+            [ -s "${OTELSPAN_HELPER:-}" ] || return 0
+            otel_host_class=""
+            if [ -s "${OTELSPAN_ENV_FILE:-}" ]; then
+              otel_host_class=$(sed -n "s/^otel_host_class='\(.*\)'\$/\1/p" "$OTELSPAN_ENV_FILE" || true)
+            fi
+            if [ "${otel_host_class:-unknown}" = "github-hosted" ]; then
+              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                printf '### OpenTelemetry\n\nHost class is github-hosted; the LAN Collector is unreachable from this runner, so no span was emitted. Missing telemetry is UNKNOWN, not a failure.\n' >>"$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+              fi
+              echo "otel: host-class github-hosted — Collector unreachable from this runner, span not emitted"
+              return 0
+            fi
+            bash "$OTELSPAN_HELPER" ci-emit --env-file "$OTELSPAN_ENV_FILE" \
+              --role "$1" --result "$2" "${@:3}" >/dev/null 2>&1 || true
+          }
 
           case "$PH_ACTION" in
             claim|heartbeat|finish|notice) ;;
             *)
               echo "::error::action must be claim, heartbeat, finish, or notice"
+              otel pipeline failure
+              otel job failure
               exit 2
               ;;
           esac
@@ -130,6 +224,8 @@ jobs:
             claim|heartbeat|finish)
               if ! [[ "$PH_TASK_ID" =~ ^[0-9]+$ ]]; then
                 echo "::error::task-id must be a numeric Project Home task id"
+                otel pipeline failure
+                otel job failure
                 exit 2
               fi
               ;;
@@ -140,6 +236,8 @@ jobs:
               succeeded|failed|review|retry) ;;
               *)
                 echo "::error::outcome must be succeeded, failed, review, or retry"
+                otel pipeline failure
+                otel job failure
                 exit 2
                 ;;
             esac
@@ -150,17 +248,40 @@ jobs:
               completion|interrupted|blocker|deployment|mission) ;;
               *)
                 echo "::error::notice-category is not allowed"
+                otel pipeline failure
+                otel job failure
                 exit 2
                 ;;
             esac
             if [ -z "$PH_NOTICE_KEY" ] || [ -z "$PH_NOTICE_TITLE" ]; then
               echo "::error::notice requires notice-key and notice-title"
+              otel pipeline failure
+              otel job failure
               exit 2
             fi
           fi
 
           export PH_ACTOR="$actor"
           export PH_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          # The correlation ids ride one interface: the `Estate-Task` request
+          # header Project Home already accepts (its telemetry.py correlation()
+          # falls back to it when a body carries no id pair). Not a body field —
+          # the body below is exactly the CI body it has always been, because a
+          # consumer that knows nothing about telemetry must see a shape it
+          # recognises.
+          #
+          # The value comes from the same helper and the same env-file the
+          # traceparent above came from, so the ids on the wire are the ids this
+          # run's spans are recorded under. With no trailer the value is empty
+          # and no header is sent at all: a missing id is honest, an invented one
+          # would join this run to a task it is not working on. A notice belongs
+          # to no task, so it never carries the header even on a mission's HEAD.
+          ph_estate_task=""
+          if [ "$PH_ACTION" != "notice" ] && [ -s "${OTELSPAN_HELPER:-}" ] && [ -s "${OTELSPAN_ENV_FILE:-}" ]; then
+            ph_estate_task=$(bash "$OTELSPAN_HELPER" project-home-header --env-file "$OTELSPAN_ENV_FILE" 2>/dev/null || true)
+          fi
+          printf '%s' "$ph_estate_task" > "$RUNNER_TEMP/project-home-estate-task"
 
           python3 - <<'PY' > "$RUNNER_TEMP/project-home-request.json"
           import json
@@ -193,6 +314,8 @@ jobs:
           if [ "$PH_SELF_SMOKE" = "1" ]; then
             if [ "$GITHUB_REPOSITORY" != "Rylee-Bee/ci-harness" ]; then
               echo "::error::self-smoke is reserved for ci-harness"
+              otel pipeline failure
+              otel job failure
               exit 2
             fi
             python3 - <<'PY'
@@ -204,29 +327,60 @@ jobs:
           if os.environ["PH_ACTION"] == "notice":
               assert payload["key"] == os.environ["PH_NOTICE_KEY"]
               assert payload["title"] == os.environ["PH_NOTICE_TITLE"]
+          # One interface: the ids ride the Estate-Task header, never the body.
+          assert "mission_id" not in payload and "mission_task_id" not in payload, payload
+          header = Path(os.environ["RUNNER_TEMP"], "project-home-estate-task").read_text()
+          ctx = Path(os.environ["RUNNER_TEMP"], "otel-ctx.env")
+          found = {}
+          if ctx.is_file():
+              found = dict(
+                  line.split("=", 1)
+                  for line in ctx.read_text().splitlines()
+                  if line.startswith(("otel_mission_id=", "otel_task_id="))
+              )
+          mission = found.get("otel_mission_id", "''").strip("'")
+          task = found.get("otel_task_id", "''").strip("'")
+          if os.environ["PH_ACTION"] == "notice" or not (mission and task):
+              assert header == "", header
+          else:
+              assert header == mission + "/" + task, header
           print("Project Home reporter self-smoke: request construction OK")
           PY
+            otel pipeline success
+            otel job success
             exit 0
           fi
 
           if [ -z "$PH_URL" ] || [ -z "$PH_TOKEN" ]; then
             echo "::error::project-home-url and project-home-token secrets are required"
+            otel pipeline failure
+            otel job failure
             exit 2
           fi
 
           base="${PH_URL%/}"
           case "$PH_ACTION" in
-            claim) endpoint="$base/api/ci/tasks/$PH_TASK_ID/claim" ;;
-            heartbeat) endpoint="$base/api/ci/tasks/$PH_TASK_ID/heartbeat" ;;
-            finish) endpoint="$base/api/ci/tasks/$PH_TASK_ID/finish" ;;
-            notice) endpoint="$base/api/ci/notice" ;;
+            claim) endpoint="$base/api/ci/tasks/$PH_TASK_ID/claim"; route="/api/ci/tasks/{task_id}/claim" ;;
+            heartbeat) endpoint="$base/api/ci/tasks/$PH_TASK_ID/heartbeat"; route="/api/ci/tasks/{task_id}/heartbeat" ;;
+            finish) endpoint="$base/api/ci/tasks/$PH_TASK_ID/finish"; route="/api/ci/tasks/{task_id}/finish" ;;
+            notice) endpoint="$base/api/ci/notice"; route="/api/ci/notice" ;;
           esac
 
           response="$RUNNER_TEMP/project-home-response.json"
           set +e
           # The token reaches curl on stdin (--config -), never in argv: on a self-hosted runner any
-          # process of the same user can read another's command line while it runs.
-          code=$(printf 'header = "Authorization: Bearer %s"\n' "$PH_TOKEN" | curl --config - \
+          # process of the same user can read another's command line while it runs. The traceparent
+          # and the Estate-Task ids ride the same way. Only the route and the method are ever
+          # recorded; the host, the task id and the request body stay out of the span.
+          code=$({
+            printf 'header = "Authorization: Bearer %s"\n' "$PH_TOKEN"
+            if [ -n "$otel_traceparent" ]; then
+              printf 'header = "traceparent: %s"\n' "$otel_traceparent"
+            fi
+            if [ -n "$ph_estate_task" ]; then
+              printf 'header = "Estate-Task: %s"\n' "$ph_estate_task"
+            fi
+          } | curl --config - \
             --silent --show-error \
             --output "$response" \
             --write-out '%{http_code}' \
@@ -239,12 +393,26 @@ jobs:
 
           if [ "$curl_rc" -ne 0 ]; then
             echo "::error::Project Home request failed at the transport layer"
+            otel pipeline failure
+            otel job failure
             exit "$curl_rc"
           fi
           case "$code" in
-            2??) echo "Project Home accepted CI action '$PH_ACTION' (HTTP $code)" ;;
+            2??)
+              echo "Project Home accepted CI action '$PH_ACTION' (HTTP $code)"
+              otel job success --child --name project_home.ci_request --parent-span-id "$otel_job_span" \
+                --attr "http.request.method=POST" --attr "http.route=$route" \
+                --attr "url.path=$route" --attr "http.response.status_code=$code"
+              otel pipeline success
+              otel job success
+              ;;
             *)
               echo "::error::Project Home rejected CI action '$PH_ACTION' (HTTP $code)"
+              otel job failure --child --name project_home.ci_request --parent-span-id "$otel_job_span" \
+                --attr "http.request.method=POST" --attr "http.route=$route" \
+                --attr "url.path=$route" --attr "http.response.status_code=$code"
+              otel pipeline failure
+              otel job failure
               exit 1
               ;;
           esac
