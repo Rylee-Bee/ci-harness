@@ -117,6 +117,49 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+# Telemetry is observation, never authority: this step cannot fail the job
+      # (continue-on-error) and the helper exits 0 even when the Collector is
+      # unreachable. The endpoint arrives through the standard OTEL environment
+      # variables, read from repository variables — a new `workflow_call` input
+      # on every template would cost a self-smoke job each for one string, and
+      # would be estate-specific discovery the contract explicitly rules out.
+      # An unset variable is simply empty, which means off.
+      - name: OpenTelemetry context
+        continue-on-error: true
+        shell: bash
+        env:
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT }}
+          OTEL_SERVICE_NAME: ${{ vars.OTEL_SERVICE_NAME }}
+          ESTATE_HOST_CLASS: ${{ vars.ESTATE_HOST_CLASS }}
+          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/Rylee-Bee/ci-harness/main/scripts/otel-span.sh
+          OTELSPAN_HELPER: ${{ runner.temp }}/otel-span.sh
+          OTELSPAN_ENV_FILE: ${{ runner.temp }}/otel-ctx.env
+          OTELSPAN_JOB_KEY: reusable-uat:uat
+          OTELSPAN_PIPELINE_NAME: ${{ github.workflow }}
+          OTELSPAN_RUN_ID: ${{ github.run_id }}
+          OTELSPAN_RUN_ATTEMPT: ${{ github.run_attempt }}
+          OTELSPAN_REPOSITORY: ${{ github.repository }}
+          OTELSPAN_REF_HEAD: ${{ github.head_ref || github.ref_name }}
+          OTELSPAN_HEAD_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          OTELSPAN_CHANGE_ID: ${{ github.event.pull_request.number }}
+          OTELSPAN_RUNNER_LABEL: ${{ inputs.runs-on }}
+        run: |
+          set -u
+          # The helper lives in this repo, but a reusable workflow's `github`
+          # context is the *caller's* repository, so checkout above never brings
+          # it along. Prefer the tree when we are the caller (self-smoke), and
+          # fetch it from ci-harness otherwise.
+          if [ -s "$GITHUB_WORKSPACE/scripts/otel-span.sh" ]; then
+            cp "$GITHUB_WORKSPACE/scripts/otel-span.sh" "$OTELSPAN_HELPER"
+          elif ! curl -fsSL --max-time 15 "$OTELSPAN_HELPER_URL" -o "$OTELSPAN_HELPER"; then
+            echo "::notice::otel: span helper unavailable; telemetry stays off for this job"
+            rm -f "$OTELSPAN_HELPER"
+          fi
+          if [ -s "$OTELSPAN_HELPER" ]; then
+            bash "$OTELSPAN_HELPER" context --env-file "$OTELSPAN_ENV_FILE" || true
+          fi
       # setup-node v7 THROWS "Some specified paths were not resolved, unable
       # to cache dependencies." when `cache:` is set and no lockfile
       # resolves — so caching is gated on lockfile presence, the same gate
@@ -177,3 +220,21 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.working-directory }}/${{ inputs.uat-output-dir }}
           retention-days: 14
+
+      # `if: always()` because the job may have failed, and the span has to carry
+      # that verdict — that is the whole reason it exists. A job that never ran
+      # (a gated `if: inputs.enable-*` job) never reaches this step either, which
+      # is equally honest.
+      - name: OpenTelemetry spans
+        if: ${{ always() }}
+        continue-on-error: true
+        shell: bash
+        env:
+          OTELSPAN_HELPER: ${{ runner.temp }}/otel-span.sh
+          OTELSPAN_ENV_FILE: ${{ runner.temp }}/otel-ctx.env
+          OTELSPAN_RESULT: ${{ job.status }}
+        run: |
+          set -u
+          [ -s "$OTELSPAN_HELPER" ] || exit 0
+          bash "$OTELSPAN_HELPER" ci-emit --env-file "$OTELSPAN_ENV_FILE" --role pipeline --result "$OTELSPAN_RESULT" || true
+          bash "$OTELSPAN_HELPER" ci-emit --env-file "$OTELSPAN_ENV_FILE" --role job --result "$OTELSPAN_RESULT" || true

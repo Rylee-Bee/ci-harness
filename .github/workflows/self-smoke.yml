@@ -39,6 +39,216 @@ jobs:
       notice-body: "request construction only"
       self-smoke: true
 
+  # The telemetry helper, proven by the only means CI has offline: a throwaway
+  # OTLP receiver on 127.0.0.1 and assertions about the bodies that arrive. It
+  # is the executable half of scripts/otel-span.sh; the job below proves the
+  # templates drive it correctly.
+  otel-selftest:
+    name: OpenTelemetry span helper self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the span helper's own self-test
+        run: bash scripts/otel-span.sh --self-test
+
+  # What the templates actually do: run their two telemetry steps against a live
+  # receiver, in a job whose HEAD commit carries an Estate-Task trailer, and
+  # assert the spans that come back. Plus a structural assertion that every
+  # template keeps the pair, and that neither step can ever fail a job — the one
+  # thing static lint cannot prove and a swallowed red would hide.
+  otel-template-wiring:
+    name: telemetry wiring in every template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every template carries the telemetry pair, and it cannot fail a job
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys
+          import yaml
+
+          problems = []
+          templates = sorted(glob.glob(".github/workflows/reusable-*.yml"))
+          for path in templates:
+              doc = yaml.safe_load(open(path, encoding="utf-8"))
+              for job, body in doc.get("jobs", {}).items():
+                  assert "uses" not in body, f"{path}:{job} is a `uses:` job"
+                  steps = {s.get("name"): s for s in body.get("steps", []) if s.get("name")}
+
+                  context = steps.get("OpenTelemetry context")
+                  if context is None:
+                      problems.append(f"{path}:{job} has no 'OpenTelemetry context' step")
+                  else:
+                      if context.get("continue-on-error") is not True:
+                          problems.append(f"{path}:{job} 'OpenTelemetry context' can fail the job")
+                      if "vars.OTEL_EXPORTER_OTLP_ENDPOINT" not in str(
+                              (context.get("env") or {}).get("OTEL_EXPORTER_OTLP_ENDPOINT", "")):
+                          problems.append(f"{path}:{job} does not read the standard endpoint variable")
+
+                  # The reporter is one step doing all four actions, so its spans
+                  # are emitted inside that step rather than as a closing one; the
+                  # assertion there is that it emits them AND hands Project Home a
+                  # traceparent plus the Estate-Task ids in the header the body
+                  # consumer never has to learn about. Every other template has
+                  # the closing pair.
+                  if path.endswith("reusable-project-home.yml"):
+                      script = "\n".join(str(s.get("run", "")) for s in body.get("steps", []))
+                      for needle in ("ci-emit", "traceparent", "Estate-Task", "|| true"):
+                          if needle not in script:
+                              problems.append(f"{path}:{job} never sends {needle!r}")
+                      # One interface: the ids ride the header, never the body.
+                      if "mission_id" in script.split("self-smoke is reserved")[0]:
+                          problems.append(f"{path}:{job} puts a mission id in a request body")
+                      continue
+
+                  spans = steps.get("OpenTelemetry spans")
+                  if spans is None:
+                      problems.append(f"{path}:{job} has no 'OpenTelemetry spans' step")
+                      continue
+                  if spans.get("continue-on-error") is not True:
+                      problems.append(f"{path}:{job} 'OpenTelemetry spans' can fail the job")
+                  if "always()" not in str(spans.get("if", "")):
+                      problems.append(f"{path}:{job} 'OpenTelemetry spans' is not `if: always()`")
+                  if "OTELSPAN_ENV_FILE" not in (spans.get("env") or {}):
+                      problems.append(f"{path}:{job} 'OpenTelemetry spans' ignores the context it computed")
+              if problems:
+                  print("\n".join(problems), file=sys.stderr)
+                  raise SystemExit(1)
+              print(f"OK {path}: every job emits a pipeline-role span and a job span, neither can fail it")
+          PY
+      - name: Run one template job's telemetry steps against a live receiver
+        run: |
+          set -euo pipefail
+          # A PR a mission lands carries this trailer on its HEAD commit; the
+          # template's context step reads it and joins that task's trace.
+          repo="$RUNNER_TEMP/mission-pr"
+          git init -q "$repo"
+          git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty \
+            -m "feat: land the thing
+
+          Estate-Task: m7/T42"
+
+          python3 - "$RUNNER_TEMP/rx" <<'PY' &
+          import http.server, json, os, sys
+          outdir = sys.argv[1]
+          os.makedirs(outdir, exist_ok=True)
+
+          class Handler(http.server.BaseHTTPRequestHandler):
+              protocol_version = "HTTP/1.1"
+
+              def do_POST(self):
+                  n = int(self.headers.get("Content-Length") or 0)
+                  with open(os.path.join(outdir, "spans.jsonl"), "a", encoding="utf-8") as fh:
+                      fh.write(json.dumps(json.loads(self.rfile.read(n) or b"{}")) + "\n")
+                  self.send_response(200)
+                  self.send_header("Content-Type", "application/json")
+                  self.send_header("Content-Length", "2")
+                  self.end_headers()
+                  self.wfile.write(b"{}")
+
+              def log_message(self, *args):
+                  pass
+
+          srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+          with open(os.path.join(outdir, "port"), "w", encoding="utf-8") as fh:
+              fh.write(str(srv.server_address[1]))
+          srv.serve_forever()
+          PY
+          receiver=$!
+          for _ in $(seq 1 100); do
+            [ -s "$RUNNER_TEMP/rx/port" ] && break
+            sleep 0.1
+          done
+          port=$(cat "$RUNNER_TEMP/rx/port")
+          trap 'kill "$receiver" 2>/dev/null || true' EXIT
+
+          # Exactly the two steps reusable-python.yml runs, same env, same helper.
+          export OTELSPAN_HELPER="$RUNNER_TEMP/otel-span.sh"
+          export OTELSPAN_ENV_FILE="$RUNNER_TEMP/otel-ctx.env"
+          export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$port"
+          export OTEL_SERVICE_NAME="ci-harness"
+          export OTELSPAN_JOB_KEY="reusable-python:test"
+          export OTELSPAN_PIPELINE_NAME="self-smoke"
+          export OTELSPAN_RUN_ID="4242"
+          export OTELSPAN_RUN_ATTEMPT="1"
+          export OTELSPAN_REPOSITORY="Rylee-Bee/ci-harness"
+          export OTELSPAN_REF_HEAD="otel/ci-19"
+          export OTELSPAN_HEAD_REVISION="cccccccccccccccccccccccccccccccccccccccc"
+          export OTELSPAN_CHANGE_ID="314"
+          export OTELSPAN_RUNNER_LABEL="bazzite"
+          cp scripts/otel-span.sh "$OTELSPAN_HELPER"
+
+          ( cd "$repo" && bash "$OTELSPAN_HELPER" context --env-file "$OTELSPAN_ENV_FILE" )
+          bash "$OTELSPAN_HELPER" ci-emit --env-file "$OTELSPAN_ENV_FILE" --role pipeline --result success
+          bash "$OTELSPAN_HELPER" ci-emit --env-file "$OTELSPAN_ENV_FILE" --role job --result success
+
+          sleep 0.5
+          python3 - "$RUNNER_TEMP/rx/spans.jsonl" <<'PY'
+          import hashlib, json, sys
+
+          spans = []
+          for line in open(sys.argv[1], encoding="utf-8"):
+              body = json.loads(line)
+              for rs in body["resourceSpans"]:
+                  for ss in rs["scopeSpans"]:
+                      for span in ss["spans"]:
+                          attrs = {a["key"]: list(a["value"].values())[0] for a in span["attributes"]}
+                          span["attrs"] = attrs
+                          spans.append(span)
+
+          want_trace = hashlib.sha256(b"estate-task|m7|T42").hexdigest()[:32]
+          want_root = hashlib.sha256(b"estate-task-root|m7|T42").hexdigest()[:16]
+          by_name = {s["name"]: s for s in spans}
+          assert set(by_name) == {"ci.pipeline.run", "ci.job.run"}, f"got {sorted(by_name)}"
+          pipeline, job = by_name["ci.pipeline.run"], by_name["ci.job.run"]
+
+          # The pipeline-role span carries the run's identity but the JOB's
+          # interval: it starts where this job's context step ran, because no
+          # job can see the pipeline's own extent. Asserted so the README's
+          # "read a duration off it as a job's slice" cannot go quietly false.
+          assert pipeline["startTimeUnixNano"] == job["startTimeUnixNano"], (
+              pipeline["startTimeUnixNano"], job["startTimeUnixNano"]
+          )
+
+          # The PR joined the mission task's trace, computed from the ids alone.
+          assert pipeline["traceId"] == job["traceId"] == want_trace, pipeline["traceId"]
+          assert pipeline["parentSpanId"] == want_root, pipeline.get("parentSpanId")
+          assert job["parentSpanId"] == pipeline["spanId"], job.get("parentSpanId")
+
+          for span in (pipeline, job):
+              for key, value in (
+                  ("cicd.pipeline.name", "self-smoke"),
+                  ("cicd.pipeline.run.id", "4242"),
+                  ("cicd.pipeline.result", "success"),
+                  ("cicd.worker.name", "bazzite"),
+                  ("vcs.repository.name", "ci-harness"),
+                  ("vcs.ref.head.name", "otel/ci-19"),
+                  ("vcs.change.id", "314"),
+                  ("estate.host.class", "bazzite"),
+                  ("estate.actor.kind", "ci"),
+                  ("estate.mission.id", "m7"),
+                  ("estate.task.id", "T42"),
+              ):
+                  assert span["attrs"].get(key) == value, f"{span['name']}: {key}={span['attrs'].get(key)!r}"
+
+          assert job["attrs"]["cicd.pipeline.task.name"] == "reusable-python:test"
+          assert job["attrs"]["cicd.pipeline.task.run.result"] == "success"
+          assert len(job["attrs"]["cicd.pipeline.task.run.id"]) == 32
+
+          # Nothing private: no bearer token, no host name, no home path, no URL.
+          blob = json.dumps(spans)
+          for banned in ("Bearer", "/home/", "/var/home", "127.0.0.1", "://"):
+              assert banned not in blob, f"span body leaked {banned!r}"
+
+          print(f"OK: the template's own steps joined trace {want_trace[:12]}… "
+                f"and sent a pipeline-role span and a job span carrying the standard conventions")
+          PY
+
   python:
     name: python template
     uses: ./.github/workflows/reusable-python.yml

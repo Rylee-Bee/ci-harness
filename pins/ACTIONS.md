@@ -39,6 +39,12 @@ upstream tag on the pin date (never copied blindly from an older workflow).
 Repo-specific pins (pytest in `uv.lock`, Playwright browsers, app base
 images) stay in the consuming repo — that's semantics, not plumbing.
 
+## First-party files fetched at run time
+
+| File | Ref | Where it lives | Rationale |
+|---|---|---|---|
+| `scripts/otel-span.sh` | `main` — `https://raw.githubusercontent.com/Rylee-Bee/ci-harness/main/scripts/otel-span.sh` | every `reusable-*.yml` "OpenTelemetry context" step | A reusable workflow's `github` context is the **caller's** repository, so a template's own `actions/checkout` never brings this repo's tree with it. Each step prefers `$GITHUB_WORKSPACE/scripts/otel-span.sh` when it is there (self-smoke, where ci-harness is the caller) and falls back to the raw fetch. Same reference policy as the templates themselves: consumers adopt ci-harness at `@main` and the bytes are identical at a SHA, so pinning a file that changes in every commit of the repo would be a checksum maintained against itself. No new action, no new package: the emitter is `bash`, `curl` and `python3`, all already on every runner these templates use. |
+
 ## Bump protocol
 
 1. Resolve the new tag's commit: `git ls-remote https://github.com/<org>/<action>.git refs/tags/<tag>^{}`
