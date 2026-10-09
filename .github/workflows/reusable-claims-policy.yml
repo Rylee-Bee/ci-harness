@@ -145,8 +145,14 @@ jobs:
           curl -sSL --retry 3 -o "$RUNNER_TEMP/conftest.tar.gz" \
             "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VER}/conftest_${CONFTEST_VER}_Linux_${arch}.tar.gz"
           tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/conftest.tar.gz" conftest
-          sudo install -m 0755 "$RUNNER_TEMP/conftest" /usr/local/bin/conftest
-          conftest --version
+          # Into the runner's own temp dir, on the PATH of the later steps: no sudo. On a self-hosted runner without
+          # root (the estate's Bazzite runners) `sudo install ... /usr/local/bin` failed, the canary then "denied a
+          # known-good input", and the check went red on every PR for a reason that had nothing to do with the PR
+          # (agent-platform#227, 2026-10-08).
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 0755 "$RUNNER_TEMP/conftest" "$RUNNER_TEMP/bin/conftest"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/conftest" --version
           jq --version
 
       - name: Canary -- prove the policy fires before trusting it
