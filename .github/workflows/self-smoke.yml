@@ -176,7 +176,7 @@ jobs:
           export OTELSPAN_PIPELINE_NAME="self-smoke"
           export OTELSPAN_RUN_ID="4242"
           export OTELSPAN_RUN_ATTEMPT="1"
-          export OTELSPAN_REPOSITORY="Rylee-Bee/ci-harness"
+          export OTELSPAN_REPOSITORY="rylee-bee-labs/ci-harness"
           export OTELSPAN_REF_HEAD="otel/ci-19"
           export OTELSPAN_HEAD_REVISION="cccccccccccccccccccccccccccccccccccccccc"
           export OTELSPAN_CHANGE_ID="314"
@@ -382,8 +382,8 @@ jobs:
         run: |
           set -euo pipefail
           # contractctl is stdlib-only; the runner's python3 is enough
-          git clone --depth 1 https://github.com/Rylee-Bee/play-nice-contracts "$RUNNER_TEMP/library"
-          sha=$(git ls-remote https://github.com/Rylee-Bee/play-nice-contracts refs/heads/main | awk '{print $1}')
+          git clone --depth 1 https://github.com/rylee-bee-labs/play-nice-contracts "$RUNNER_TEMP/library"
+          sha=$(git ls-remote https://github.com/rylee-bee-labs/play-nice-contracts refs/heads/main | awk '{print $1}')
           test -n "$sha"
           sed "s/@PIN@/$sha/" fixtures/contract-demo/current-template.adoption.yaml > "$RUNNER_TEMP/current.adoption.yaml"
           python3 "$RUNNER_TEMP/library/tools/contractctl/contractctl.py" \

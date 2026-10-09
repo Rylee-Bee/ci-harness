@@ -20,7 +20,7 @@ name: reusable-claims-policy
 # property that exposes a called reusable workflow's own ref. `github.workflow_ref`
 # looks like it should, but it resolves to the CALLER's workflow — proven, not
 # assumed: ci-harness's own self-smoke logged
-#   WORKFLOW_REF: Rylee-Bee/ci-harness/.github/workflows/self-smoke.yml@refs/pull/28/merge
+#   WORKFLOW_REF: rylee-bee-labs/ci-harness/.github/workflows/self-smoke.yml@refs/pull/28/merge
 # i.e. the caller, not reusable-claims-policy.yml. `github.job_workflow_sha` would
 # be the right property if it existed; actionlint 1.7.12's schema does not list it
 # and the docs page did not confirm it, so this template does not rely on it.
@@ -108,7 +108,7 @@ jobs:
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT }}
           OTEL_SERVICE_NAME: ${{ vars.OTEL_SERVICE_NAME }}
           ESTATE_HOST_CLASS: ${{ vars.ESTATE_HOST_CLASS }}
-          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/Rylee-Bee/ci-harness/main/scripts/otel-span.sh
+          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/rylee-bee-labs/ci-harness/main/scripts/otel-span.sh
           OTELSPAN_HELPER: ${{ runner.temp }}/otel-span.sh
           OTELSPAN_ENV_FILE: ${{ runner.temp }}/otel-ctx.env
           OTELSPAN_JOB_KEY: reusable-claims-policy:claims
@@ -155,7 +155,7 @@ jobs:
       - name: Fetch the canonical policy at that revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: Rylee-Bee/ci-harness
+          repository: rylee-bee-labs/ci-harness
           ref: ${{ steps.pin.outputs.ref }}
           path: ${{ github.workspace }}/.ci-harness-src
           persist-credentials: false

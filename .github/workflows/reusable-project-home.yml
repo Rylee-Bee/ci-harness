@@ -7,7 +7,7 @@ name: reusable-project-home
 # lease, finish that owned task, or queue a safe BOOP notice.
 #
 # Real callers provide both secrets. The self-smoke escape hatch is accepted
-# only when the caller repository itself is Rylee-Bee/ci-harness; it validates
+# only when the caller repository itself is rylee-bee-labs/ci-harness; it validates
 # request construction without touching the network.
 #
 # Telemetry: this job carries a `cicd.pipeline.task.*` span and hands Project
@@ -126,7 +126,7 @@ jobs:
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT }}
           OTEL_SERVICE_NAME: ${{ vars.OTEL_SERVICE_NAME }}
           ESTATE_HOST_CLASS: ${{ vars.ESTATE_HOST_CLASS }}
-          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/Rylee-Bee/ci-harness/main/scripts/otel-span.sh
+          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/rylee-bee-labs/ci-harness/main/scripts/otel-span.sh
           OTELSPAN_HELPER: ${{ runner.temp }}/otel-span.sh
           OTELSPAN_ENV_FILE: ${{ runner.temp }}/otel-ctx.env
           OTELSPAN_JOB_KEY: reusable-project-home:report
@@ -328,7 +328,7 @@ jobs:
           PY
 
           if [ "$PH_SELF_SMOKE" = "1" ]; then
-            if [ "$GITHUB_REPOSITORY" != "Rylee-Bee/ci-harness" ]; then
+            if [ "$GITHUB_REPOSITORY" != "rylee-bee-labs/ci-harness" ]; then
               echo "::error::self-smoke is reserved for ci-harness"
               otel pipeline failure
               otel job failure
