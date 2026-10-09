@@ -3,7 +3,7 @@ name: reusable-contract-freshness
 # ci-harness — Play-Nice contract freshness gate (workflow_call).
 #
 # Harness-owned mechanics: blobless-clone the authoritative contract source
-# (Rylee-Bee/play-nice-contracts) over https, run its stdlib-only
+# (rylee-bee-labs/play-nice-contracts) over https, run its stdlib-only
 # `contractctl freshness --manifest <caller manifest> --json`, and
 # propagate the tool's exit code as the job's exit code. Repo-owned
 # semantics: which manifest expresses the adoption pin
@@ -108,7 +108,7 @@ jobs:
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT }}
           OTEL_SERVICE_NAME: ${{ vars.OTEL_SERVICE_NAME }}
           ESTATE_HOST_CLASS: ${{ vars.ESTATE_HOST_CLASS }}
-          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/Rylee-Bee/ci-harness/main/scripts/otel-span.sh
+          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/rylee-bee-labs/ci-harness/main/scripts/otel-span.sh
           OTELSPAN_HELPER: ${{ runner.temp }}/otel-span.sh
           OTELSPAN_ENV_FILE: ${{ runner.temp }}/otel-ctx.env
           OTELSPAN_JOB_KEY: reusable-contract-freshness:freshness
@@ -138,7 +138,7 @@ jobs:
       - name: Blobless-clone contract source (https, no credentials)
         run: >-
           git clone --filter=blob:none
-          https://github.com/Rylee-Bee/play-nice-contracts.git
+          https://github.com/rylee-bee-labs/play-nice-contracts.git
           "${{ runner.temp }}/play-nice-contracts"
       - name: Contract freshness gate (fail closed)
         id: check

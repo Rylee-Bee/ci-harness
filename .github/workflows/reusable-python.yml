@@ -123,7 +123,7 @@ jobs:
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT }}
           OTEL_SERVICE_NAME: ${{ vars.OTEL_SERVICE_NAME }}
           ESTATE_HOST_CLASS: ${{ vars.ESTATE_HOST_CLASS }}
-          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/Rylee-Bee/ci-harness/main/scripts/otel-span.sh
+          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/rylee-bee-labs/ci-harness/main/scripts/otel-span.sh
           OTELSPAN_HELPER: ${{ runner.temp }}/otel-span.sh
           OTELSPAN_ENV_FILE: ${{ runner.temp }}/otel-ctx.env
           OTELSPAN_JOB_KEY: reusable-python:test
@@ -210,7 +210,7 @@ jobs:
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT }}
           OTEL_SERVICE_NAME: ${{ vars.OTEL_SERVICE_NAME }}
           ESTATE_HOST_CLASS: ${{ vars.ESTATE_HOST_CLASS }}
-          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/Rylee-Bee/ci-harness/main/scripts/otel-span.sh
+          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/rylee-bee-labs/ci-harness/main/scripts/otel-span.sh
           OTELSPAN_HELPER: ${{ runner.temp }}/otel-span.sh
           OTELSPAN_ENV_FILE: ${{ runner.temp }}/otel-ctx.env
           OTELSPAN_JOB_KEY: reusable-python:ruff
@@ -292,7 +292,7 @@ jobs:
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT }}
           OTEL_SERVICE_NAME: ${{ vars.OTEL_SERVICE_NAME }}
           ESTATE_HOST_CLASS: ${{ vars.ESTATE_HOST_CLASS }}
-          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/Rylee-Bee/ci-harness/main/scripts/otel-span.sh
+          OTELSPAN_HELPER_URL: https://raw.githubusercontent.com/rylee-bee-labs/ci-harness/main/scripts/otel-span.sh
           OTELSPAN_HELPER: ${{ runner.temp }}/otel-span.sh
           OTELSPAN_ENV_FILE: ${{ runner.temp }}/otel-ctx.env
           OTELSPAN_JOB_KEY: reusable-python:bandit
