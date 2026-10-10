@@ -62,8 +62,8 @@ on:
         default: ""
       pytest-workers:
         description: >-
-          Parallel pytest workers (pytest-xdist, added for this run only with
-          `uv run --with`, so no repo lockfile changes). 0 = serial, the
+          Parallel pytest workers (pytest-xdist, installed into the synced
+          environment for this run only, so no repo lockfile changes). 0 = serial, the
           default. Opt in per repo only after its suite has passed in parallel
           (2026-10-10: agent-platform 633 s -> 173 s on 6 workers, all green).
         type: number
@@ -171,7 +171,11 @@ jobs:
           PYTEST_WORKERS: ${{ inputs.pytest-workers }}
         run: |
           if [ "${PYTEST_WORKERS:-0}" -gt 0 ]; then
-            uv run --with pytest-xdist pytest -n "$PYTEST_WORKERS" ${{ inputs.pytest-args }}
+            # Into the environment `uv sync --frozen` just built, then run it as synced (--no-sync).
+            # `uv run --with` (the first version, ci-harness#42) ran pytest without the project's own
+            # dependencies: project-home#188 failed with "No module named 'fastapi'".
+            uv pip install --quiet pytest-xdist
+            uv run --no-sync pytest -n "$PYTEST_WORKERS" ${{ inputs.pytest-args }}
           else
             uv run pytest ${{ inputs.pytest-args }}
           fi
