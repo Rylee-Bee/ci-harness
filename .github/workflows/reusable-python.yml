@@ -60,6 +60,15 @@ on:
         type: string
         required: false
         default: ""
+      pytest-workers:
+        description: >-
+          Parallel pytest workers (pytest-xdist, added for this run only with
+          `uv run --with`, so no repo lockfile changes). 0 = serial, the
+          default. Opt in per repo only after its suite has passed in parallel
+          (2026-10-10: agent-platform 633 s -> 173 s on 6 workers, all green).
+        type: number
+        required: false
+        default: 0
       post-test-commands:
         description: >-
           Shell lines to run in the synced environment after pytest passes,
@@ -158,7 +167,14 @@ jobs:
       - name: Sync locked dependencies
         run: uv sync --frozen ${{ inputs.sync-args }}
       - name: Run pytest
-        run: uv run pytest ${{ inputs.pytest-args }}
+        env:
+          PYTEST_WORKERS: ${{ inputs.pytest-workers }}
+        run: |
+          if [ "${PYTEST_WORKERS:-0}" -gt 0 ]; then
+            uv run --with pytest-xdist pytest -n "$PYTEST_WORKERS" ${{ inputs.pytest-args }}
+          else
+            uv run pytest ${{ inputs.pytest-args }}
+          fi
       - name: Repo-owned post-test gates
         if: ${{ inputs.post-test-commands != '' }}
         run: |
